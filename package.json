@@ -1,0 +1,8 @@
+{
+  "name": "scenra-workspace",
+  "private": true,
+  "scripts": {
+    "scenra": "pnpm --filter scenra tauri dev",
+    "target": "pnpm --filter demo-target tauri dev"
+  }
+}

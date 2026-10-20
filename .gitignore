@@ -1,0 +1,12 @@
+node_modules/
+dist/
+target/
+**/src-tauri/gen/schemas/
+*.log
+*.local
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Phase 0 test recordings are evidence, but too big for git
+recordings/
