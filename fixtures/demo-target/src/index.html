@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="styles.css" />
+    <title>Lumina (demo target)</title>
+    <script type="module" src="/main.js" defer></script>
+  </head>
+
+  <body>
+    <header>
+      <h1>Lumina</h1>
+      <span class="tag">Scenra demo target</span>
+    </header>
+
+    <main>
+      <section class="toolbar">
+        <button data-testid="create-recording">New Recording</button>
+        <button data-testid="open-settings" class="secondary">Settings</button>
+      </section>
+
+      <section class="panel" data-testid="recording-panel" hidden>
+        <label for="title">Recording title</label>
+        <input id="title" data-testid="title-input" placeholder="Weekly sync" />
+        <button data-testid="start-recording">Start</button>
+      </section>
+
+      <p class="status" data-testid="status">Ready.</p>
+
+      <ul class="recordings" data-testid="recordings"></ul>
+    </main>
+
+    <dialog data-testid="settings-dialog">
+      <h2>Settings</h2>
+      <p>Generate structured notes after each meeting?</p>
+      <div class="actions">
+        <button data-testid="settings-cancel" class="secondary">Cancel</button>
+        <button data-testid="settings-confirm">Confirm</button>
+      </div>
+    </dialog>
+  </body>
+</html>
