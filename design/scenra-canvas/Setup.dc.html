@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Scenra ready check</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F6F5F1}
+a{color:#4338CA}a:hover{color:#312E81}
+</style>
+</helmet>
+<div style="min-height: 900px; background: #F6F5F1; color: #1B1A1F; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; display: flex; flex-direction: column">
+<main style="flex: 1; width: 100%; max-width: 1120px; margin: 0 auto; box-sizing: border-box; padding: 40px 28px 40px; display: flex; flex-direction: column; gap: 24px">
+
+<div style="display: flex; flex-direction: column; gap: 6px">
+<span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #5E5B66">BEFORE YOU START</span>
+<h1 style="margin: 0; font-size: 44px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.05">Let’s get you ready.</h1>
+<p style="margin: 0; color: #5E5B66; font-size: 16px">Scenra checks everything for you. You only need to act on amber items.</p>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 14px">
+
+<section aria-labelledby="score-h" style="flex: 1 1 260px; display: flex; flex-direction: column; justify-content: space-between; gap: 18px; padding: 22px 24px; border-radius: 20px; background: #1B1A1F; color: #F6F5F1">
+<h2 id="score-h" style="margin: 0; font-size: 14px; font-weight: 600; color: #C9C6CF">Ready to record</h2>
+<div style="display: flex; align-items: baseline; gap: 8px">
+<strong style="font-size: 64px; font-weight: 800; letter-spacing: -0.03em; line-height: 1">4</strong>
+<span style="font-size: 20px; color: #C9C6CF">of 5 checks</span>
+</div>
+<div aria-hidden="true" style="display: flex; gap: 4px">
+<span style="flex: 1; height: 6px; border-radius: 3px; background: #3CCB7F"></span>
+<span style="flex: 1; height: 6px; border-radius: 3px; background: #3CCB7F"></span>
+<span style="flex: 1; height: 6px; border-radius: 3px; background: #3CCB7F"></span>
+<span style="flex: 1; height: 6px; border-radius: 3px; background: #3CCB7F"></span>
+<span style="flex: 1; height: 6px; border-radius: 3px; background: #F5A524"></span>
+</div>
+</section>
+
+<section aria-labelledby="check-h" style="flex: 2 1 520px; background: #FFFFFF; border: 1px solid #E4E2DC; border-radius: 20px; padding: 20px 24px; display: flex; flex-direction: column">
+<h2 id="check-h" style="margin: 0 0 6px; font-size: 18px; font-weight: 700">Ready check</h2>
+<sc-for list="{{checks}}" as="c" hint-placeholder-count="5">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 11px 0; border-top: 1px solid #F0EEE9">
+<span style="{{c.dot}}"></span>
+<strong style="font-size: 15px; min-width: 130px">{{c.name}}</strong>
+<span style="flex: 1 1 240px; font-size: 14px; color: #4A4752">{{c.detail}}</span>
+<sc-if value="{{c.action}}" hint-placeholder-val="{{false}}">
+<button type="button" style="font: inherit; font-size: 13px; font-weight: 700; padding: 8px 14px; min-height: 40px; border-radius: 10px; border: 1px solid #F5C77E; background: #FEF6E7; color: #93370D; cursor: pointer">{{c.action}}</button>
+</sc-if>
+</div>
+</sc-for>
+</section>
+
+<section aria-labelledby="cursor-h" style="flex: 2 1 520px; background: #FFFFFF; border: 1px solid #E4E2DC; border-radius: 20px; padding: 22px 24px; display: flex; flex-direction: column; gap: 14px">
+<div>
+<h2 id="cursor-h" style="margin: 0; font-size: 18px; font-weight: 700">Cursor style</h2>
+<p style="margin: 4px 0 0; font-size: 14px; color: #5E5B66">How clicks look in your video. Change it any time.</p>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+<sc-for list="{{styles}}" as="p" hint-placeholder-count="3">
+<button type="button" aria-pressed="{{p.pressed}}" style="{{p.card}}">
+<span style="position: relative; display: block; height: 76px; border-radius: 12px; background: #F3F1EC">
+<span style="{{p.ring}}"></span>
+<svg width="18" height="22" viewBox="0 0 18 22" aria-hidden="true" style="position: absolute; left: 50%; top: 34px"><path d="M2 2l13 9-6 1.5L6.5 19z" fill="#1B1A1F" stroke="#FFFFFF" stroke-width="1.5" stroke-linejoin="round"></path></svg>
+</span>
+<span style="display: block; margin-top: 10px; font-size: 15px; font-weight: 700">{{p.name}}</span>
+<span style="display: block; font-size: 13px; color: #5E5B66; line-height: 1.4">{{p.desc}}</span>
+</button>
+</sc-for>
+</div>
+</section>
+
+<section aria-labelledby="keys-h" style="flex: 1 1 340px; background: #1B1A1F; color: #F6F5F1; border-radius: 20px; padding: 22px 24px; display: flex; flex-direction: column; gap: 10px">
+<div>
+<h2 id="keys-h" style="margin: 0; font-size: 18px; font-weight: 700">Your shortcuts</h2>
+<p style="margin: 4px 0 0; font-size: 14px; color: #C9C6CF">They work even when Scenra is hidden.</p>
+</div>
+<sc-for list="{{keys}}" as="k" hint-placeholder-count="4">
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; border-top: 1px solid #34323A">
+<span style="font-size: 14px">{{k.label}}</span>
+<kbd style="font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 4px 8px; border-radius: 7px; background: #2C2A31; border: 1px solid #45424C; color: #FFFFFF">{{k.combo}}</kbd>
+</div>
+</sc-for>
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: 12px; background: #3A1512; border: 1px solid #7A271A">
+<span style="font-size: 14px; font-weight: 700; color: #FFD9D4">Emergency stop</span>
+<kbd style="font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 4px 8px; border-radius: 7px; background: #D92D20; color: #FFFFFF">Ctrl Alt Esc</kbd>
+</div>
+</section>
+</div>
+</main>
+
+<div style="position: sticky; bottom: 16px; display: flex; justify-content: center; padding: 0 16px 16px; z-index: 5">
+<nav aria-label="Scenra dock" style="display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-end; gap: 8px; padding: 8px 10px; border-radius: 24px; background: rgba(27,26,31,0.82); backdrop-filter: blur(22px); border: 1px solid rgba(255,255,255,0.14); box-shadow: 0 14px 40px rgba(27,26,31,0.28)">
+<sc-for list="{{dock}}" as="d" hint-placeholder-count="5">
+<a href="{{d.href}}" aria-current="{{d.current}}" style="display: flex; flex-direction: column; align-items: center; gap: 3px; text-decoration: none; padding: 0 2px">
+<span style="{{d.tile}}"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="{{d.path}}" fill="none" stroke="#FFFFFF" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>
+<span style="font-size: 10px; font-weight: 600; color: #D6D3DC">{{d.label}}</span>
+<span style="{{d.dot}}"></span>
+</a>
+</sc-for>
+<span aria-hidden="true" style="width: 1px; height: 52px; margin: 0 4px 10px; background: rgba(255,255,255,0.22)"></span>
+<div style="display: flex; align-items: center; gap: 14px; height: 60px; margin-bottom: 10px; padding: 0 8px 0 16px; border-radius: 16px; background: rgba(255,255,255,0.08); color: #FFFFFF">
+<div style="display: flex; flex-direction: column; gap: 2px">
+<strong style="font-size: 14px">4 of 5 ready</strong>
+<span style="font-size: 12px; color: #C9C6CF">You can fix the last one later</span>
+</div>
+<a href="Main.dc.html" style="display: flex; align-items: center; font-size: 14px; font-weight: 700; padding: 0 16px; min-height: 44px; border-radius: 12px; background: #4338CA; color: #FFFFFF; text-decoration: none">Continue</a>
+</div>
+</nav>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const dot = (ok) => 'width: 12px; height: 12px; border-radius: 50%; flex: none; background: ' + (ok ? '#1E9E4A' : '#D97706') + ';';
+    const checks = [
+      { name: 'OBS Studio', detail: 'Connected. Scenra starts and stops recording for you.', ok: true },
+      { name: 'Microphone', detail: 'Working. Your voice is saved as its own file.', ok: true },
+      { name: 'Your app', detail: 'Lumina is open and Scenra can see its buttons.', ok: true },
+      { name: 'Disk space', detail: '84 GB free, about 40 hours of video.', ok: true },
+      { name: 'Notifications', detail: 'Windows pop-ups could appear in your video.', ok: false, action: 'Silence while recording' },
+    ].map((c) => ({ ...c, dot: dot(c.ok), action: c.action || '' }));
+    const selected = 'Clear';
+    const styles = [
+      { name: 'Subtle', desc: 'A small ring on each click.', size: 18, alpha: 0.12 },
+      { name: 'Clear', desc: 'A visible ripple. Best for most videos.', size: 30, alpha: 0.2 },
+      { name: 'Bold', desc: 'Big ripple and highlight, for tutorials.', size: 44, alpha: 0.3 },
+    ].map((p) => {
+      const on = p.name === selected;
+      return {
+        ...p,
+        pressed: on ? 'true' : 'false',
+        card: 'font: inherit; text-align: left; padding: 12px; border-radius: 14px; cursor: pointer; color: #1B1A1F; background: #FFFFFF; border: 2px solid ' + (on ? '#4338CA' : '#E4E2DC') + ';',
+        ring: 'position: absolute; left: calc(50% - ' + (p.size / 2 - 2) + 'px); top: ' + (36 - p.size / 2) + 'px; width: ' + p.size + 'px; height: ' + p.size + 'px; border-radius: 50%; background: rgba(67,56,202,' + p.alpha + '); border: 2px solid rgba(67,56,202,0.6);',
+      };
+    });
+    const keys = [
+      { label: 'Do the next action', combo: 'Ctrl Alt Space' },
+      { label: 'I finished this line', combo: 'Ctrl Alt N' },
+      { label: 'Pause / resume', combo: 'Ctrl Alt P' },
+      { label: 'Retry this scene', combo: 'Ctrl Alt R' },
+    ];
+    const NAV = [
+      { key: 'setup', label: 'Ready', href: 'Setup.dc.html', path: 'M5 12.5l4.5 4.5L19 7.5' },
+      { key: 'board', label: 'Storyboard', href: 'Main.dc.html', path: 'M4 5h7v14H4zM13 5h7v6h-7zM13 13h7v6h-7z' },
+      { key: 'teach', label: 'Teach', href: 'Teach.dc.html', path: 'M6 4l12 8-5.5 1.5L10 19z' },
+      { key: 'record', label: 'Record', href: 'Record.dc.html', path: 'M12 7a5 5 0 1 0 0.01 0z' },
+      { key: 'takes', label: 'Takes', href: 'Takes.dc.html', path: 'M4 6h16v12H4zM10 9.5v5l4-2.5z' },
+    ];
+    const dock = NAV.map((n) => {
+      const on = n.key === 'setup';
+      const size = on ? 52 : 44;
+      const bg = on ? '#4338CA' : n.key === 'record' ? '#B42318' : '#3A3840';
+      return { ...n, current: on ? 'page' : 'false',
+        tile: 'width: ' + size + 'px; height: ' + size + 'px; border-radius: ' + Math.round(size * 0.28) + 'px; display: flex; align-items: center; justify-content: center; background: ' + bg + '; box-shadow: 0 4px 12px rgba(0,0,0,0.25);',
+        dot: 'width: 5px; height: 5px; border-radius: 50%; background: ' + (on ? '#FFFFFF' : 'transparent') + ';' };
+    });
+    return { checks, styles, keys, dock };
+  }
+}
+</script>
+</body>
+</html>

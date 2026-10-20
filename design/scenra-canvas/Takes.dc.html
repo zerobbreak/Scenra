@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Scenra scenes and takes</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F6F5F1}
+a{color:#4338CA}a:hover{color:#312E81}
+</style>
+</helmet>
+<div style="min-height: 860px; background: #F6F5F1; color: #1B1A1F; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; display: flex; flex-direction: column">
+<main style="flex: 1; width: 100%; max-width: 1180px; margin: 0 auto; box-sizing: border-box; padding: 36px 28px 32px; display: flex; flex-direction: column; gap: 22px">
+
+<div style="display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px">
+<div>
+<h1 style="margin: 0; font-size: 44px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.05">Scenes &amp; takes.</h1>
+<p style="margin: 8px 0 0; color: #5E5B66; font-size: 15px">Re-record any single scene. Your other scenes stay untouched.</p>
+</div>
+<button type="button" style="font: inherit; font-size: 14px; font-weight: 600; padding: 10px 16px; min-height: 44px; border-radius: 12px; border: 1px solid #E4E2DC; background: #FFFFFF; color: #1B1A1F; cursor: pointer">Open recordings folder</button>
+</div>
+
+<ol aria-label="Scenes" style="list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 12px">
+<sc-for list="{{scenes}}" as="s" hint-placeholder-count="5">
+<li style="{{s.card}}">
+<div style="position: relative; height: 84px; border-radius: 12px; background: #ECEAE4; overflow: hidden">
+<div style="position: absolute; left: 10px; top: 10px; width: 60%; height: 8px; border-radius: 4px; background: #DAD7CF"></div>
+<div style="position: absolute; left: 10px; top: 24px; width: 40%; height: 8px; border-radius: 4px; background: #DAD7CF"></div>
+<span style="position: absolute; right: 8px; bottom: 8px; font-family: 'JetBrains Mono', monospace; font-size: 11px; padding: 2px 6px; border-radius: 5px; background: rgba(27,26,31,0.8); color: #FFFFFF">{{s.length}}</span>
+</div>
+<div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #5E5B66">SCENE {{s.num}}</div>
+<div style="font-size: 15px; font-weight: 700; line-height: 1.3">{{s.title}}</div>
+<span style="{{s.badgeStyle}}">{{s.badge}}</span>
+</li>
+</sc-for>
+</ol>
+
+<div style="display: flex; flex-wrap: wrap; gap: 14px">
+
+<section aria-labelledby="prev-h" style="flex: 3 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 14px; padding: 16px; border-radius: 20px; background: #1B1A1F; color: #F6F5F1">
+<div style="position: relative; height: 260px; border-radius: 14px; background: #2C2A31; overflow: hidden">
+<div style="position: absolute; left: 24px; top: 22px; right: 24px; bottom: 22px; border-radius: 10px; background: #F3F1EC"></div>
+<div style="position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 64px; height: 64px; border-radius: 50%; background: rgba(27,26,31,0.75); display: flex; align-items: center; justify-content: center">
+<svg width="22" height="22" viewBox="0 0 14 14" aria-hidden="true"><path d="M4 2.5v9l7.5-4.5z" fill="#FFFFFF"></path></svg>
+</div>
+</div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px">
+<div>
+<span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #C9C6CF">SCENE 03 · TAKE 3 · 0:48</span>
+<h2 id="prev-h" style="margin: 2px 0 0; font-size: 20px; font-weight: 700">Record the meeting</h2>
+</div>
+<div aria-hidden="true" style="display: flex; align-items: center; gap: 2px; height: 28px">
+<sc-for list="{{wave}}" as="w" hint-placeholder-count="24">
+<span style="{{w.bar}}"></span>
+</sc-for>
+</div>
+</div>
+</section>
+
+<section aria-labelledby="takes-h" style="flex: 2 1 340px; min-width: 0; background: #FFFFFF; border: 1px solid #E4E2DC; border-radius: 20px; padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<h2 id="takes-h" style="margin: 0; font-size: 18px; font-weight: 700">Takes for this scene</h2>
+<sc-for list="{{takes}}" as="t" hint-placeholder-count="2">
+<div style="{{t.row}}">
+<div style="flex: 1 1 160px; display: flex; flex-direction: column; gap: 2px">
+<strong style="font-size: 15px">{{t.name}}</strong>
+<span style="font-size: 13px; color: #5E5B66">{{t.meta}}</span>
+</div>
+<span style="{{t.tagStyle}}">{{t.tag}}</span>
+<sc-if value="{{t.canUse}}" hint-placeholder-val="{{true}}">
+<button type="button" style="font: inherit; font-size: 13px; font-weight: 600; padding: 8px 12px; min-height: 40px; border-radius: 10px; border: 1px solid #E4E2DC; background: #FFFFFF; color: #1B1A1F; cursor: pointer">Use this take</button>
+</sc-if>
+</div>
+</sc-for>
+<div role="status" style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 12px; background: #1B1A1F; color: #F6F5F1; font-size: 14px; align-self: flex-start">
+Take 1 moved to Trash.
+<button type="button" style="font: inherit; font-size: 14px; font-weight: 700; padding: 4px 10px; border-radius: 7px; border: none; background: #F6F5F1; color: #1B1A1F; cursor: pointer">Undo</button>
+</div>
+</section>
+
+<section aria-labelledby="files-h" style="flex: 1 1 100%; background: #FFFFFF; border: 1px solid #E4E2DC; border-radius: 20px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px">
+<h2 id="files-h" style="margin: 0; font-size: 16px; font-weight: 700">What you get for each scene</h2>
+<div style="display: flex; flex-wrap: wrap; gap: 12px">
+<sc-for list="{{files}}" as="f" hint-placeholder-count="4">
+<div style="flex: 1 1 220px; display: flex; gap: 12px; align-items: flex-start; padding: 12px; border-radius: 14px; background: #FBFAF7; border: 1px solid #EFEDE8">
+<span style="width: 38px; height: 38px; flex: none; border-radius: 10px; background: #EEF0FF; display: flex; align-items: center; justify-content: center; font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 500; color: #312E81">{{f.ext}}</span>
+<div style="display: flex; flex-direction: column; gap: 2px">
+<strong style="font-size: 14px">{{f.name}}</strong>
+<span style="font-size: 13px; color: #5E5B66; line-height: 1.4">{{f.desc}}</span>
+</div>
+</div>
+</sc-for>
+</div>
+</section>
+</div>
+</main>
+
+<div style="position: sticky; bottom: 16px; display: flex; justify-content: center; padding: 0 16px 16px; z-index: 5">
+<nav aria-label="Scenra dock" style="display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-end; gap: 8px; padding: 8px 10px; border-radius: 24px; background: rgba(27,26,31,0.82); backdrop-filter: blur(22px); border: 1px solid rgba(255,255,255,0.14); box-shadow: 0 14px 40px rgba(27,26,31,0.28)">
+<sc-for list="{{dock}}" as="d" hint-placeholder-count="5">
+<a href="{{d.href}}" aria-current="{{d.current}}" style="display: flex; flex-direction: column; align-items: center; gap: 3px; text-decoration: none; padding: 0 2px">
+<span style="{{d.tile}}"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="{{d.path}}" fill="none" stroke="#FFFFFF" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>
+<span style="font-size: 10px; font-weight: 600; color: #D6D3DC">{{d.label}}</span>
+<span style="{{d.dot}}"></span>
+</a>
+</sc-for>
+<span aria-hidden="true" style="width: 1px; height: 52px; margin: 0 4px 10px; background: rgba(255,255,255,0.22)"></span>
+<div style="display: flex; align-items: center; gap: 14px; height: 60px; margin-bottom: 10px; padding: 0 8px 0 16px; border-radius: 16px; background: rgba(255,255,255,0.08); color: #FFFFFF">
+<div style="display: flex; flex-direction: column; gap: 2px">
+<strong style="font-size: 14px">Scene 3 needs a retake</strong>
+<span style="font-size: 12px; color: #C9C6CF">3 of 5 scenes recorded</span>
+</div>
+<a href="Record.dc.html" style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 700; padding: 0 16px; min-height: 44px; border-radius: 12px; background: #D92D20; color: #FFFFFF; text-decoration: none">
+<span style="width: 9px; height: 9px; border-radius: 50%; background: #FFFFFF"></span>Record new take</a>
+</div>
+</nav>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":860}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const pill = (kind) => {
+      const base = 'align-self: flex-start; font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px;';
+      if (kind === 'done') return base + ' background: #EAF6EE; color: #157F3C;';
+      if (kind === 'redo') return base + ' background: #FEF6E7; color: #93370D;';
+      return base + ' background: #F1EFEA; color: #5E5B66;';
+    };
+    const scenes = [
+      { num: '01', title: 'Welcome', length: '0:24', badge: 'Done · 1 take', kind: 'done' },
+      { num: '02', title: 'Create a recording', length: '0:31', badge: 'Done · 2 takes', kind: 'done' },
+      { num: '03', title: 'Record the meeting', length: '0:48', badge: 'Needs retake', kind: 'redo', selected: true },
+      { num: '04', title: 'Generate notes', length: '—', badge: 'Not recorded', kind: 'none' },
+      { num: '05', title: 'Review results', length: '—', badge: 'Not recorded', kind: 'none' },
+    ].map((s) => ({
+      ...s,
+      badgeStyle: pill(s.kind),
+      card: 'flex: 1 1 170px; display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 18px; background: #FFFFFF; border: ' + (s.selected ? '2px solid #4338CA' : '1px solid #E4E2DC') + ';',
+    }));
+    const takes = [
+      { name: 'Take 3', meta: 'Today 14:32 · 0:48', tag: 'Chosen', kind: 'done', chosen: true },
+      { name: 'Take 2', meta: 'Today 14:20 · paused, the mouse moved', tag: 'Needs review', kind: 'redo' },
+    ].map((t) => ({
+      ...t,
+      canUse: !t.chosen,
+      tagStyle: pill(t.kind),
+      row: 'display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 12px 14px; border-radius: 14px; ' + (t.chosen ? 'background: #F5F6FF; border: 1px solid #D5D8FB;' : 'background: #FBFAF7; border: 1px solid #EFEDE8;'),
+    }));
+    const files = [
+      { ext: 'MKV', name: 'Video', desc: 'Your app with cursor and clicks. No teleprompter.' },
+      { ext: 'WAV', name: 'Your voice', desc: 'Narration on its own, easy to clean up.' },
+      { ext: 'LOG', name: 'What happened', desc: 'Each step with its time, for chapters.' },
+      { ext: 'INFO', name: 'Scene details', desc: 'Script version and settings used.' },
+    ];
+    const wave = [6, 10, 16, 22, 14, 8, 18, 26, 20, 12, 6, 10, 18, 24, 16, 10, 6, 12, 20, 14, 8, 16, 10, 6].map((h) => ({ bar: 'width: 3px; height: ' + h + 'px; border-radius: 2px; background: #3CCB7F;' }));
+    const NAV = [
+      { key: 'setup', label: 'Ready', href: 'Setup.dc.html', path: 'M5 12.5l4.5 4.5L19 7.5' },
+      { key: 'board', label: 'Storyboard', href: 'Main.dc.html', path: 'M4 5h7v14H4zM13 5h7v6h-7zM13 13h7v6h-7z' },
+      { key: 'teach', label: 'Teach', href: 'Teach.dc.html', path: 'M6 4l12 8-5.5 1.5L10 19z' },
+      { key: 'record', label: 'Record', href: 'Record.dc.html', path: 'M12 7a5 5 0 1 0 0.01 0z' },
+      { key: 'takes', label: 'Takes', href: 'Takes.dc.html', path: 'M4 6h16v12H4zM10 9.5v5l4-2.5z' },
+    ];
+    const dock = NAV.map((n) => {
+      const on = n.key === 'takes';
+      const size = on ? 52 : 44;
+      const bg = on ? '#4338CA' : n.key === 'record' ? '#B42318' : '#3A3840';
+      return { ...n, current: on ? 'page' : 'false',
+        tile: 'width: ' + size + 'px; height: ' + size + 'px; border-radius: ' + Math.round(size * 0.28) + 'px; display: flex; align-items: center; justify-content: center; background: ' + bg + '; box-shadow: 0 4px 12px rgba(0,0,0,0.25);',
+        dot: 'width: 5px; height: 5px; border-radius: 50%; background: ' + (on ? '#FFFFFF' : 'transparent') + ';' };
+    });
+    return { scenes, takes, files, wave, dock };
+  }
+}
+</script>
+</body>
+</html>

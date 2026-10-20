@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Scenra home</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,600&amp;family=Plus+Jakarta+Sans:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0E1013}
+</style>
+</helmet>
+<div style="width: 1280px; height: 800px; box-sizing: border-box; background: #0E1013; color: #F2EFE8; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; display: flex; flex-direction: column">
+
+<header style="height: 60px; flex: none; display: flex; align-items: center; gap: 16px; padding: 0 22px; border-bottom: 1px solid #22252B">
+<a href="CDHome.dc.html" aria-current="page" style="font-size: 17px; font-weight: 800; color: #F2EFE8; text-decoration: none">Scenra</a>
+<span style="font-size: 13px; color: #8D8F96">Lumina launch demo</span>
+<nav aria-label="Mode" style="margin: 0 auto; display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: #1A1C21">
+<a href="MergedTeach.dc.html" style="padding: 8px 16px; border-radius: 9px; color: #C9C7C1; font-size: 13px; font-weight: 600; text-decoration: none">Teach</a>
+<a href="MergedPrepare.dc.html" style="padding: 8px 16px; border-radius: 9px; color: #C9C7C1; font-size: 13px; font-weight: 600; text-decoration: none">Prepare</a>
+<a href="MergedRehearse.dc.html" style="padding: 8px 16px; border-radius: 9px; color: #C9C7C1; font-size: 13px; font-weight: 600; text-decoration: none">Rehearse</a>
+<a href="MergedRecord.dc.html" style="display: flex; align-items: center; gap: 7px; padding: 8px 16px; border-radius: 9px; color: #C9C7C1; font-size: 13px; font-weight: 600; text-decoration: none"><span style="width: 8px; height: 8px; border-radius: 50%; background: #F04438"></span>Record</a>
+</nav>
+<a href="MergedTakes.dc.html" style="padding: 7px 12px; border-radius: 9px; border: 1px solid #2A2D33; color: #C9C7C1; font-size: 13px; font-weight: 600; text-decoration: none">Takes</a>
+<a href="CDReady.dc.html" style="display: flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 9px; border: 1px solid #2A2D33; color: #C9C7C1; font-size: 13px; font-weight: 600; text-decoration: none"><span style="width: 6px; height: 6px; border-radius: 50%; background: #F59E0B"></span>Ready 4/5</a>
+</header>
+
+<main style="flex: 1; padding: 28px 40px; display: flex; flex-direction: column; gap: 20px; min-height: 0">
+<div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 20px">
+<div>
+<span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #6F727A">PROJECT</span>
+<h1 style="margin: 4px 0 0; font-size: 40px; font-weight: 800; letter-spacing: -0.03em">Lumina launch demo</h1>
+</div>
+<a href="MergedRehearse.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 20px; border-radius: 14px; background: #4F46E5; color: #FFFFFF; text-decoration: none">
+<span style="font-size: 12px; color: #C7CBF7">Pick up where you left off</span>
+<strong style="font-size: 15px">Rehearse scene 2 →</strong></a>
+</div>
+
+<div style="display: flex; gap: 14px">
+<section aria-label="Estimated length" style="flex: 2; padding: 18px 22px; border-radius: 20px; background: #15171B; border: 1px solid #22252B; display: flex; align-items: center; gap: 20px">
+<div style="display: flex; flex-direction: column; gap: 4px">
+<span style="font-size: 13px; color: #8D8F96">Estimated video length</span>
+<strong style="font-size: 36px; font-weight: 800; letter-spacing: -0.02em">3 min 20 s</strong>
+</div>
+<div aria-hidden="true" style="flex: 1; display: flex; gap: 4px; height: 12px">
+<span style="flex: 9; border-radius: 4px; background: #34D399"></span><span style="flex: 19; border-radius: 4px; background: #818CF8"></span><span style="flex: 21; border-radius: 4px; background: #34D399"></span><span style="flex: 14; border-radius: 4px; background: #3A3D45"></span><span style="flex: 12; border-radius: 4px; background: #3A3D45"></span>
+</div>
+</section>
+<section aria-label="Rehearsed" style="flex: 1; padding: 18px 22px; border-radius: 20px; background: #15171B; border: 1px solid #22252B; display: flex; flex-direction: column; gap: 4px">
+<span style="font-size: 13px; color: #8D8F96">Scenes rehearsed</span>
+<strong style="font-size: 32px; font-weight: 800">2 <span style="font-size: 16px; color: #8D8F96">of 5</span></strong>
+</section>
+<section aria-label="Actions found" style="flex: 1; padding: 18px 22px; border-radius: 20px; background: #14352A; border: 1px solid #1F5A43; display: flex; flex-direction: column; gap: 4px">
+<span style="font-size: 13px; color: #6EE7B7">Actions found reliably</span>
+<strong style="font-size: 32px; font-weight: 800">10 <span style="font-size: 16px; color: #6EE7B7">of 12</span></strong>
+</section>
+</div>
+
+<section aria-label="Scenes" style="display: flex; flex-direction: column; gap: 8px">
+<sc-for list="{{scenes}}" as="s" hint-placeholder-count="5">
+<div style="display: flex; align-items: center; gap: 18px; padding: 14px 18px; border-radius: 16px; background: #15171B; border: 1px solid #22252B">
+<span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #6F727A; width: 22px">{{s.num}}</span>
+<strong style="font-size: 15px; width: 180px">{{s.title}}</strong>
+<span style="flex: 1; font-family: 'Literata', Georgia, serif; font-size: 16px; color: #B5B3AD; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{s.line}}</span>
+<span style="display: flex; align-items: center; gap: 6px; padding: 3px 10px 3px 4px; border-radius: 999px; background: #1E1D3A; color: #C7CBF7; font-size: 12px; font-weight: 700"><span style="width: 16px; height: 16px; border-radius: 50%; background: #4F46E5"></span>{{s.actions}}</span>
+<span style="{{s.badge}}">{{s.state}}</span>
+</div>
+</sc-for>
+</section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const pill = (k) => 'width: 110px; text-align: center; font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px; ' + (k === 'ok' ? 'background: #14352A; color: #6EE7B7;' : k === 'warn' ? 'background: #3B2A0C; color: #FDE68A;' : 'background: #23262C; color: #9A9890;');
+    const scenes = [
+      { num: '01', title: 'Welcome', line: 'Welcome to Lumina, an AI-powered note-taking application.', actions: '1 action', state: 'Rehearsed', k: 'ok' },
+      { num: '02', title: 'Create a new note', line: 'Now let’s create a new note. Lumina allows you to record meetings…', actions: '3 actions', state: 'Needs a fix', k: 'warn' },
+      { num: '03', title: 'Record the meeting', line: 'Recording starts right away. You can pause at any point…', actions: '3 actions', state: 'Rehearsed', k: 'ok' },
+      { num: '04', title: 'Generate notes', line: 'When we stop, Lumina transcribes the audio and writes structured notes.', actions: '2 actions', state: 'Not rehearsed', k: 'todo' },
+      { num: '05', title: 'Review results', line: 'Let’s take a look at what it found.', actions: '1 action', state: 'Not rehearsed', k: 'todo' },
+    ].map((s) => ({ ...s, badge: pill(s.k) }));
+    return { scenes };
+  }
+}
+</script>
+</body>
+</html>
