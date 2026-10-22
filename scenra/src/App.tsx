@@ -1,11 +1,19 @@
 import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import Button from "./Button";
+import DisplayPanel from "./DisplayPanel";
+import EnginePanel from "./EnginePanel";
+import ScriptPanel from "./ScriptPanel";
+import TargetPanel from "./TargetPanel";
 import {
   CaptureStatus,
+  MatrixRow,
   ProbeResult,
   captureStatus,
   closeTeleprompter,
   openTeleprompter,
   probeCapture,
+  runCaptureMatrix,
   setCaptureExcluded,
 } from "./capture";
 
@@ -15,19 +23,12 @@ const AFFINITY_NAMES: Record<number, string> = {
   0x11: "WDA_EXCLUDEFROMCAPTURE",
 };
 
-function Button(props: { onClick: () => void; disabled?: boolean; children: React.ReactNode }) {
-  return (
-    <button
-      className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium hover:bg-indigo-500 disabled:opacity-40"
-      {...props}
-    />
-  );
-}
-
 export default function App() {
   const [status, setStatus] = useState<CaptureStatus | null>(null);
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [matrix, setMatrix] = useState<MatrixRow[] | null>(null);
+  const [matrixRunning, setMatrixRunning] = useState(false);
 
   async function run<T>(action: () => Promise<T>, apply: (value: T) => void) {
     setError(null);
@@ -45,12 +46,20 @@ export default function App() {
 
   useEffect(() => {
     update(captureStatus);
+    // The control bar's Stop button closes the teleprompter from another window.
+    const unlisten = listen("teleprompter-closed", () => update(captureStatus));
+    return () => {
+      unlisten.then((stop) => stop());
+    };
   }, []);
 
   const open = status?.open ?? false;
 
   return (
     <main className="mx-auto max-w-2xl space-y-6 p-6">
+      <DisplayPanel />
+      <hr className="border-zinc-800" />
+
       <header>
         <p className="text-xs uppercase tracking-widest text-indigo-400">Phase 0 · Step 1</p>
         <h1 className="text-xl font-semibold">Teleprompter capture exclusion</h1>
@@ -72,7 +81,32 @@ export default function App() {
         <Button disabled={!open} onClick={() => update(closeTeleprompter)}>
           Close
         </Button>
+        <Button
+          disabled={matrixRunning}
+          onClick={async () => {
+            setMatrixRunning(true);
+            setMatrix(null);
+            await run(runCaptureMatrix, setMatrix);
+            setMatrixRunning(false);
+            update(captureStatus);
+          }}
+        >
+          {matrixRunning ? "Running matrix…" : "Run OBS matrix"}
+        </Button>
       </section>
+
+      {matrix && (
+        <div className="space-y-1 rounded-lg bg-zinc-900 p-4 text-sm">
+          <p className="font-medium">OBS matrix at {Math.round(matrix[0]?.scale * 100)} % scaling</p>
+          {matrix.map((row) => (
+            <p key={row.name} className={row.passed ? "text-emerald-300" : "text-red-300"}>
+              {row.passed ? "PASS" : "FAIL"} · {row.name} ·{" "}
+              {row.shots.map((s) => `${s.label}: ${s.pillSeen ? "pill seen" : "no pill"}`).join(", ")}
+            </p>
+          ))}
+          <p className="text-xs break-all text-zinc-500">Frames and takes: {matrix[0]?.take}</p>
+        </div>
+      )}
 
       {status && (
         <dl className="grid grid-cols-[10rem_1fr] gap-y-1 rounded-lg bg-zinc-900 p-4 text-sm">
@@ -114,6 +148,15 @@ export default function App() {
       )}
 
       {error && <p className="rounded-lg bg-red-950 p-3 text-sm text-red-200">{error}</p>}
+
+      <hr className="border-zinc-800" />
+      <TargetPanel />
+
+      <hr className="border-zinc-800" />
+      <EnginePanel />
+
+      <hr className="border-zinc-800" />
+      <ScriptPanel />
     </main>
   );
 }
