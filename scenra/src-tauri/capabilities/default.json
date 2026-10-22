@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the debug panel and the teleprompter",
-  "windows": ["main", "teleprompter"],
-  "permissions": ["core:default"]
+  "description": "Capability for the debug panel, the teleprompter pill and its control bar",
+  "windows": ["main", "teleprompter", "controls"],
+  "permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-set-size"]
 }
