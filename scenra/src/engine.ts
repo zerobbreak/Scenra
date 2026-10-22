@@ -27,6 +27,10 @@ export type TakeResult = {
   microphoneSeconds: number;
   sampleRate: number;
   channels: number;
+  /** Frames OBS dropped to rendering or encoding lag, in percent. */
+  droppedFramesPercent: number;
+  /** Physical memory free when the take stopped, in MB. */
+  freeMemoryMb: number;
 };
 export const obsStatus = () => invoke<ObsStatus>("obs_status");
 /** `folder` is relative to the takes folder; without it the take gets a timestamped one. */

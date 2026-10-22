@@ -2,6 +2,7 @@ mod ai;
 mod capture;
 mod cdp;
 mod display;
+mod encoding;
 mod engine;
 mod hooks;
 mod input;

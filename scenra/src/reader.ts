@@ -209,7 +209,8 @@ export function useReader(script: Scenario | null, session: Session | null, paus
     lastError,
     doNext,
     restartScene,
-    startScene: () => startScene(),
+    /// Records `scene` (default: the current one). After it, reading carries on from the scene after it.
+    startScene: (scene?: number) => startScene(scene),
   };
 }
 

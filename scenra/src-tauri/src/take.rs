@@ -4,9 +4,11 @@
 //! Scenra records with its own OBS profile, "Scenra" (Advanced output, MKV, tracks 1+2, PCM audio),
 //! and switches back to the presenter's profile afterwards, so their own OBS settings are never
 //! changed. A recorded session keeps the Scenra profile between its scene takes: each switch
-//! resets OBS's video pipeline, and a take started during the reset loses frames. The mic goes to tracks 1 and 2, desktop audio to track 1 only: one recorder, so the
-//! mic is never recorded twice.
+//! resets OBS's video pipeline, and a take started during the reset loses frames. The mic goes to
+//! tracks 1 and 2, desktop audio to track 1 only: one recorder, so the mic is never recorded twice.
+//! Video encoding is set up by `encoding`.
 
+use crate::encoding;
 use crate::mkv;
 use crate::obs::Obs;
 use crate::page;
@@ -42,6 +44,7 @@ pub struct CurrentTake {
 #[derive(Clone)]
 struct Running {
     dir: PathBuf,
+    frames_at_start: encoding::FrameCounts,
 }
 
 #[derive(Serialize)]
@@ -62,6 +65,10 @@ pub struct TakeResult {
     microphone_seconds: f64,
     sample_rate: u32,
     channels: u16,
+    /// Frames OBS dropped to rendering or encoding lag during the take, in percent.
+    dropped_frames_percent: f64,
+    /// Physical memory free when the take stopped, in MB.
+    free_memory_mb: u64,
 }
 
 fn err(e: impl std::fmt::Display) -> String {
@@ -112,8 +119,10 @@ fn use_scenra_profile(obs: &mut Obs) -> Result<String, String> {
         obs.request("SetCurrentProfile", json!({ "profileName": PROFILE }))?;
     }
 
-    let mut changed = false;
-    for (category, name, value) in SETTINGS {
+    let encoder = choose_encoder(obs)?;
+    let mut changed = write_encoder_settings(encoder)?;
+    let video = [("AdvOut", "RecEncoder", encoder), ("AdvOut", "RecUseRescale", "false")];
+    for (category, name, value) in SETTINGS.into_iter().chain(video) {
         let now = obs.request("GetProfileParameter", json!({ "parameterCategory": category, "parameterName": name }))?;
         if now["parameterValue"] != value {
             obs.request(
@@ -134,7 +143,40 @@ fn use_scenra_profile(obs: &mut Obs) -> Result<String, String> {
             obs.request("SetCurrentProfile", json!({ "profileName": PROFILE }))?;
         }
     }
+    encoding::apply_video(obs, encoder)?;
     Ok(if current == PROFILE || current.is_empty() { "Untitled".into() } else { current })
+}
+
+/// The GPU's hardware encoder, unless it has already failed to start on this machine.
+fn choose_encoder(obs: &mut Obs) -> Result<&'static str, String> {
+    let (category, name) = encoding::FAILED;
+    let failed = obs.request("GetProfileParameter", json!({ "parameterCategory": category, "parameterName": name }))?;
+    Ok(match encoding::hardware() {
+        Some(hardware) if failed["parameterValue"] != hardware => hardware,
+        _ => encoding::X264,
+    })
+}
+
+/// Writes the profile's `recordEncoder.json` if it doesn't already hold these settings (OBS adds
+/// its own keys when it saves, so only Scenra's are compared). Returns whether it wrote.
+fn write_encoder_settings(encoder: &str) -> Result<bool, String> {
+    let Some(dir) = encoding::profile_dir(PROFILE) else { return Ok(false) };
+    let path = dir.join("recordEncoder.json");
+    let want = encoding::settings(encoder);
+    let have: Value = std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    if want.as_object().is_some_and(|w| w.iter().all(|(k, v)| have.get(k) == Some(v))) {
+        return Ok(false);
+    }
+    std::fs::write(&path, want.to_string()).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(true)
+}
+
+/// Starts recording into `dir` and waits until the output is live.
+fn record(obs: &mut Obs, dir: &str) -> Result<(), String> {
+    obs.request("SetRecordDirectory", json!({ "recordDirectory": dir }))?;
+    obs.request("StartRecord", json!({}))?;
+    // StartRecord returns before the output is live; a scene must not start before its take does.
+    wait_for_recording(obs, true)
 }
 
 /// Mic on tracks 1+2, desktop audio on track 1 only.
@@ -188,11 +230,24 @@ pub fn start_take(
     // Between a session's scenes OBS is already on the Scenra profile; keep the presenter's.
     take.presenter_profile.lock().map_err(err)?.get_or_insert(profile);
     route_audio(&mut obs)?;
-    obs.request("SetRecordDirectory", json!({ "recordDirectory": dir_str }))?;
-    obs.request("StartRecord", json!({}))?;
-    *slot = Some(Running { dir: PathBuf::from(&dir_str) });
-    // StartRecord returns before the output is live; a scene must not start before its take does.
-    wait_for_recording(&mut obs, true)?;
+    let frames_at_start = encoding::FrameCounts::read(&mut obs)?;
+    if let Err(e) = record(&mut obs, &dir_str) {
+        let encoder = obs.request("GetProfileParameter", json!({ "parameterCategory": "AdvOut", "parameterName": "RecEncoder" }))?;
+        let encoder = encoder["parameterValue"].as_str().unwrap_or_default().to_owned();
+        let _ = obs.request("StopRecord", json!({}));
+        if encoder == encoding::X264 {
+            return Err(e);
+        }
+        // The hardware encoder wouldn't start: remember that, and record with x264 instead.
+        let (category, name) = encoding::FAILED;
+        obs.request(
+            "SetProfileParameter",
+            json!({ "parameterCategory": category, "parameterName": name, "parameterValue": encoder }),
+        )?;
+        use_scenra_profile(&mut obs)?;
+        record(&mut obs, &dir_str).map_err(|retry| format!("{encoder} failed ({e}); x264 too: {retry}"))?;
+    }
+    *slot = Some(Running { dir: PathBuf::from(&dir_str), frames_at_start });
     Ok(dir_str)
 }
 
@@ -258,6 +313,9 @@ pub fn stop_take(take: State<'_, CurrentTake>, keep_profile: Option<bool>) -> Re
     // StopRecord returns while the output is still flushing (seconds when the encoder is behind).
     // Switching profile or reading the file before it has stopped cuts the take short.
     let stopped_at = wait_for_recording(&mut obs, false);
+    let dropped_frames_percent = encoding::FrameCounts::read(&mut obs)
+        .map(|end| (end.dropped_percent_since(&running.frames_at_start) * 10.0).round() / 10.0)
+        .unwrap_or_default();
     if stopped.is_ok() || stopped_at.is_ok() {
         *take.running.lock().map_err(err)? = None;
     }
@@ -276,6 +334,8 @@ pub fn stop_take(take: State<'_, CurrentTake>, keep_profile: Option<bool>) -> Re
         microphone_seconds: extracted.seconds,
         sample_rate: extracted.track.sample_rate,
         channels: extracted.track.channels,
+        dropped_frames_percent,
+        free_memory_mb: encoding::free_memory_mb(),
     })
 }
 

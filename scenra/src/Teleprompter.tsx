@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { LogicalSize, getCurrentWindow } from "@tauri-apps/api/window";
 import { onPrompter, sendPrompter } from "./prompter";
 import { NextAction, Position, SPEEDS, Speed, useReader } from "./reader";
+import { TakeResult } from "./engine";
 import { Line, Scenario, Session, currentScript, currentSession, onScriptChanged, onSessionChanged, words } from "./script";
 
 // Compact pill. One line while recording (design C2, CompactAction.dc.html); the control bar's
@@ -174,6 +175,15 @@ function seconds(take: { microphoneSeconds: number }) {
   return format(Math.round(take.microphoneSeconds));
 }
 
+/// Above this, a take looks visibly choppy; worth a retake once the machine has room.
+const DROPPED_FRAMES_LIMIT = 5;
+
+function choppy(take: TakeResult) {
+  if (take.droppedFramesPercent <= DROPPED_FRAMES_LIMIT) return null;
+  const memory = take.freeMemoryMb < 1024 ? ` with ${take.freeMemoryMb} MB of RAM free; close other apps and` : ";";
+  return `OBS dropped ${Math.round(take.droppedFramesPercent)}% of frames${memory} retake it`;
+}
+
 /// Recording, between scenes: what was just saved, and the button that records the next scene.
 function ReadyToRecord({ script, reader }: { script: Scenario; reader: Reader }) {
   const { pos } = reader;
@@ -186,11 +196,24 @@ function ReadyToRecord({ script, reader }: { script: Scenario; reader: Reader })
           {last && ` · scene ${last.scene + 1} saved (${seconds(last.take)})`}
         </p>
         <p style={SCRIPT_FONT} className="m-0 truncate text-xl font-semibold">{script.scenes[pos.scene].title}</p>
-        {reader.lastError && <p className="m-0 truncate text-[11px] font-semibold text-[#FDE68A]">{reader.lastError}</p>}
+        {(reader.lastError || (last && choppy(last.take))) && (
+          <p className="m-0 truncate text-[11px] font-semibold text-[#FDE68A]">
+            {reader.lastError ?? `Scene ${last!.scene + 1}: ${choppy(last!.take)}`}
+          </p>
+        )}
       </div>
+      {last && choppy(last.take) && (
+        <button
+          type="button"
+          onClick={() => reader.startScene(last.scene)}
+          className="flex-none cursor-pointer rounded-full border-none bg-[#33363D] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#40444C]"
+        >
+          Retake scene {last.scene + 1}
+        </button>
+      )}
       <button
         type="button"
-        onClick={reader.startScene}
+        onClick={() => reader.startScene()}
         className="flex flex-none cursor-pointer items-center gap-2 rounded-full border-none bg-[#DC2626] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#E23B3B]"
       >
         <span className="size-2.5 rounded-full bg-white" />
