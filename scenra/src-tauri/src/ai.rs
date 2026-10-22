@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Duration;
 
-pub const GEMINI_MODEL: &str = "gemini-flash-latest";
+/// Tried in order. A model that's overloaded (429, 5xx) or doesn't answer in time hands over to the
+/// next; the `-latest` aliases have hung for minutes under load, so the primary is pinned.
+pub const GEMINI_MODELS: [&str; 2] = ["gemini-2.5-flash", "gemini-flash-lite-latest"];
 const ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -53,7 +55,6 @@ pub trait AiProvider {
 
 pub struct Gemini {
     key: String,
-    model: &'static str,
 }
 
 #[derive(Serialize)]
@@ -66,7 +67,7 @@ pub struct AiStatus {
 
 pub fn status() -> AiStatus {
     let source = secrets::gemini_key().map(|(_, source)| source);
-    AiStatus { configured: source.is_some(), source, model: GEMINI_MODEL }
+    AiStatus { configured: source.is_some(), source, model: GEMINI_MODELS[0] }
 }
 
 impl Gemini {
@@ -76,7 +77,7 @@ impl Gemini {
             secrets::GEMINI_TARGET,
             secrets::GEMINI_ENV
         ))?;
-        Ok(Self { key, model: GEMINI_MODEL })
+        Ok(Self { key })
     }
 }
 
@@ -166,21 +167,38 @@ impl AiProvider for Gemini {
         });
 
         let agent = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(90)))
+            .timeout_global(Some(Duration::from_secs(60)))
             .http_status_as_error(false)
             .build()
             .new_agent();
-        let mut response = agent
-            .post(format!("{ENDPOINT}/{}:generateContent", self.model))
-            .header("x-goog-api-key", &self.key)
-            .send_json(&body)
-            .map_err(|e| format!("Gemini request failed: {e}"))?;
-        let status = response.status();
-        let reply: Value = response.body_mut().read_json().map_err(|e| format!("Gemini reply: {e}"))?;
-        if !status.is_success() {
-            let message = reply["error"]["message"].as_str().unwrap_or("unknown error");
-            return Err(format!("Gemini {status}: {message}"));
-        }
+        let mut busy = Vec::new();
+        let reply = 'models: {
+            for model in GEMINI_MODELS {
+                let mut response = match agent
+                    .post(format!("{ENDPOINT}/{model}:generateContent"))
+                    .header("x-goog-api-key", &self.key)
+                    .send_json(&body)
+                {
+                    Ok(response) => response,
+                    Err(e) => {
+                        busy.push(format!("{model}: {e}"));
+                        continue;
+                    }
+                };
+                let status = response.status();
+                let reply: Value = response.body_mut().read_json().map_err(|e| format!("Gemini reply: {e}"))?;
+                if status.is_success() {
+                    break 'models reply;
+                }
+                let message = reply["error"]["message"].as_str().unwrap_or("unknown error");
+                if status.as_u16() == 429 || status.is_server_error() {
+                    busy.push(format!("{model}: {status} {message}"));
+                    continue;
+                }
+                return Err(format!("Gemini {status}: {message}"));
+            }
+            return Err(format!("Gemini unavailable ({})", busy.join("; ")));
+        };
         let text = reply["candidates"][0]["content"]["parts"][0]["text"]
             .as_str()
             .ok_or("Gemini returned no script")?;

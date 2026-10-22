@@ -93,6 +93,8 @@ struct PageGeometry {
     vv_top: f64,
     vv_scale: f64,
     inner_width: f64,
+    /// What the page would deliver a click at the element's centre to, if not the element.
+    covered_by: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -123,14 +125,20 @@ fn find_js(selector: &Selector) -> String {
     format!(
         r#"(() => {{
           const el = {find};
-          let rect = null;
+          let rect = null, coveredBy = null;
           if (el) {{
             el.scrollIntoView({{ block: 'center', inline: 'center', behavior: 'instant' }});
             const r = el.getBoundingClientRect();
             rect = {{ x: r.left, y: r.top, width: r.width, height: r.height }};
+            // An open modal or overlay takes the click even though the cursor lands on the spot.
+            const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+            if (hit && hit !== el && !el.contains(hit) && !(hit.shadowRoot && hit.shadowRoot.contains(el))) {{
+              const label = (hit.getAttribute('aria-label') || hit.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 30);
+              coveredBy = hit.tagName.toLowerCase() + (hit.id ? '#' + hit.id : '') + (label ? ` “${{label}}”` : '');
+            }}
           }}
           const vv = window.visualViewport;
-          return {{ rect, dpr: devicePixelRatio, vvLeft: vv ? vv.offsetLeft : 0, vvTop: vv ? vv.offsetTop : 0,
+          return {{ rect, coveredBy, dpr: devicePixelRatio, vvLeft: vv ? vv.offsetLeft : 0, vvTop: vv ? vv.offsetTop : 0,
                    vvScale: vv ? vv.scale : 1, innerWidth }};
         }})()"#
     )
@@ -147,6 +155,9 @@ pub fn locate(session: &mut Session, pid: u32, selector: &Selector) -> Result<Lo
     let css = geometry.rect.ok_or_else(|| format!("no element {selector} on the page"))?;
     if css.width <= 0.0 || css.height <= 0.0 {
         return Err(format!("{selector} has no visible area"));
+    }
+    if let Some(what) = geometry.covered_by {
+        return Err(format!("{what} is covering {selector} in the page"));
     }
     let (top, widget, viewport) = render_widget(pid)?;
     bring_to_front(top);
@@ -240,6 +251,11 @@ impl std::fmt::Display for ProbeError {
 /// of it (including Scenra's own panel) would otherwise get the cursor and the click.
 fn bring_to_front(top: HWND) {
     unsafe {
+        // Already in front: nothing to raise, and no settle time to wait out (this runs on every
+        // press, right on the trigger word).
+        if GetForegroundWindow() == top && !IsIconic(top).as_bool() {
+            return;
+        }
         if IsIconic(top).as_bool() {
             let _ = ShowWindow(top, SW_RESTORE);
         }

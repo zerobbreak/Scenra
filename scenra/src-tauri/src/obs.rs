@@ -34,7 +34,8 @@ impl Obs {
             format!("can't reach OBS at {url} ({e}). Start OBS and enable Tools › WebSocket Server Settings.")
         })?;
         if let MaybeTlsStream::Plain(stream) = socket.get_ref() {
-            stream.set_read_timeout(Some(Duration::from_secs(10))).map_err(err)?;
+            // Switching or reloading a profile can keep OBS from answering for well over 10 s.
+            stream.set_read_timeout(Some(Duration::from_secs(30))).map_err(err)?;
         }
         let mut obs = Self { socket, next_id: 0 };
         let hello = obs.read_op(0)?;

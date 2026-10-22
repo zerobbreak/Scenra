@@ -3,7 +3,8 @@
 //!
 //! Scenra records with its own OBS profile, "Scenra" (Advanced output, MKV, tracks 1+2, PCM audio),
 //! and switches back to the presenter's profile afterwards, so their own OBS settings are never
-//! changed. The mic goes to tracks 1 and 2, desktop audio to track 1 only: one recorder, so the
+//! changed. A recorded session keeps the Scenra profile between its scene takes: each switch
+//! resets OBS's video pipeline, and a take started during the reset loses frames. The mic goes to tracks 1 and 2, desktop audio to track 1 only: one recorder, so the
 //! mic is never recorded twice.
 
 use crate::mkv;
@@ -31,12 +32,16 @@ const SETTINGS: [(&str, &str, &str); 5] = [
 ];
 
 #[derive(Default)]
-pub struct CurrentTake(Mutex<Option<Running>>);
+pub struct CurrentTake {
+    running: Mutex<Option<Running>>,
+    /// The presenter's own OBS profile while Scenra's is switched in; restored after the take,
+    /// or after the last scene of a session.
+    presenter_profile: Mutex<Option<String>>,
+}
 
+#[derive(Clone)]
 struct Running {
     dir: PathBuf,
-    /// The presenter's own OBS profile, restored after the take.
-    profile: String,
 }
 
 #[derive(Serialize)]
@@ -79,7 +84,7 @@ pub fn obs_status() -> Result<ObsStatus, String> {
 }
 
 /// "20261021-001523", UTC, for folder names.
-fn stamp() -> String {
+pub fn stamp() -> String {
     let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
@@ -148,9 +153,15 @@ fn route_audio(obs: &mut Obs) -> Result<(), String> {
     Ok(())
 }
 
+/// `folder` is relative to the takes folder, e.g. `20261022-101500/scene-02-take-1` for a scene
+/// take; without it the take gets a timestamped folder of its own.
 #[tauri::command(async)]
-pub fn start_take(take: State<'_, CurrentTake>, targets: State<'_, LaunchedTarget>) -> Result<String, String> {
-    let mut slot = take.0.lock().map_err(err)?;
+pub fn start_take(
+    take: State<'_, CurrentTake>,
+    targets: State<'_, LaunchedTarget>,
+    folder: Option<String>,
+) -> Result<String, String> {
+    let mut slot = take.running.lock().map_err(err)?;
     if slot.is_some() {
         return Err("a take is already recording".into());
     }
@@ -159,7 +170,12 @@ pub fn start_take(take: State<'_, CurrentTake>, targets: State<'_, LaunchedTarge
     if let Ok(port) = target::running_port(&targets) {
         page::wait_until_settled(port, SETTLE_TIMEOUT)?;
     }
-    let dir = PathBuf::from(TAKES_DIR).join(stamp());
+    let folder = match folder {
+        Some(folder) if is_safe_folder(&folder) => folder,
+        Some(folder) => return Err(format!("not a take folder name: {folder}")),
+        None => stamp(),
+    };
+    let dir = PathBuf::from(TAKES_DIR).join(folder);
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let dir = dir.canonicalize().map_err(err)?;
     let dir_str = dir.to_string_lossy().trim_start_matches(r"\\?\").to_owned();
@@ -169,11 +185,34 @@ pub fn start_take(take: State<'_, CurrentTake>, targets: State<'_, LaunchedTarge
         return Err("OBS is already recording".into());
     }
     let profile = use_scenra_profile(&mut obs)?;
+    // Between a session's scenes OBS is already on the Scenra profile; keep the presenter's.
+    take.presenter_profile.lock().map_err(err)?.get_or_insert(profile);
     route_audio(&mut obs)?;
     obs.request("SetRecordDirectory", json!({ "recordDirectory": dir_str }))?;
     obs.request("StartRecord", json!({}))?;
-    *slot = Some(Running { dir: PathBuf::from(&dir_str), profile });
+    *slot = Some(Running { dir: PathBuf::from(&dir_str) });
+    // StartRecord returns before the output is live; a scene must not start before its take does.
+    wait_for_recording(&mut obs, true)?;
     Ok(dir_str)
+}
+
+/// Waits until OBS reports the record output active (or inactive).
+fn wait_for_recording(obs: &mut Obs, active: bool) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        if (obs.request("GetRecordStatus", json!({}))?["outputActive"] == true) == active {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Err(format!("OBS didn't {} recording within 15 s", if active { "start" } else { "stop" }))
+}
+
+/// Letters, digits, `-`, `_` and `/` between non-empty parts: never escapes the takes folder.
+fn is_safe_folder(folder: &str) -> bool {
+    folder
+        .split('/')
+        .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
 }
 
 /// Waits until OBS has finished writing the file (its size stops changing).
@@ -191,14 +230,40 @@ fn settle(path: &Path) -> Result<(), String> {
     Err(format!("{} was still being written after 30 s", path.display()))
 }
 
+/// Switches OBS back to the presenter's profile, if Scenra's is still switched in.
+fn restore_profile(take: &CurrentTake, obs: &mut Obs) -> Result<(), String> {
+    if let Some(profile) = take.presenter_profile.lock().map_err(err)?.take() {
+        obs.request("SetCurrentProfile", json!({ "profileName": profile }))?;
+    }
+    Ok(())
+}
+
+/// Ends a recorded session: puts the presenter's OBS profile back (no-op if it already is).
 #[tauri::command(async)]
-pub fn stop_take(take: State<'_, CurrentTake>) -> Result<TakeResult, String> {
-    let running = take.0.lock().map_err(err)?.take().ok_or("no take is recording")?;
+pub fn restore_obs_profile(take: State<'_, CurrentTake>) -> Result<(), String> {
+    if take.presenter_profile.lock().map_err(err)?.is_none() {
+        return Ok(());
+    }
+    restore_profile(&take, &mut Obs::connect()?)
+}
+
+/// The take stays registered until OBS has actually stopped, so a failed stop (OBS busy or
+/// unreachable) can be retried rather than leaving OBS recording with nothing to stop it.
+/// `keep_profile` leaves OBS on the Scenra profile for the session's next scene.
+#[tauri::command(async)]
+pub fn stop_take(take: State<'_, CurrentTake>, keep_profile: Option<bool>) -> Result<TakeResult, String> {
+    let running = take.running.lock().map_err(err)?.clone().ok_or("no take is recording")?;
     let mut obs = Obs::connect()?;
     let stopped = obs.request("StopRecord", json!({}));
-    // Put the presenter's profile back whatever happened.
-    let restore = obs.request("SetCurrentProfile", json!({ "profileName": running.profile }));
+    // StopRecord returns while the output is still flushing (seconds when the encoder is behind).
+    // Switching profile or reading the file before it has stopped cuts the take short.
+    let stopped_at = wait_for_recording(&mut obs, false);
+    if stopped.is_ok() || stopped_at.is_ok() {
+        *take.running.lock().map_err(err)? = None;
+    }
+    let restore = if keep_profile == Some(true) { Ok(()) } else { restore_profile(&take, &mut obs) };
     let video = PathBuf::from(stopped?["outputPath"].as_str().ok_or("OBS didn't say where it saved the take")?);
+    stopped_at?;
     restore?;
     settle(&video)?;
 
@@ -224,5 +289,13 @@ mod tests {
         assert_eq!(s.len(), 15);
         assert_eq!(&s[8..9], "-");
         assert!(s.starts_with("20"));
+    }
+
+    #[test]
+    fn take_folders_stay_inside_the_takes_folder() {
+        assert!(is_safe_folder("20261022-101500/scene-02-take-1"));
+        for bad in ["", "../x", "a/../b", "/abs", "a//b", r"a", "C:x", "a/"] {
+            assert!(!is_safe_folder(bad), "{bad}");
+        }
     }
 }

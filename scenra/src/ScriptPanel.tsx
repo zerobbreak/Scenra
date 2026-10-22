@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import Button from "./Button";
 import { openTeleprompter } from "./capture";
-import { AiStatus, Scenario, aiStatus, currentScript, draftScript, words } from "./script";
+import { AiStatus, Mode, Scenario, aiStatus, currentScript, draftScript, startSession, words } from "./script";
 import { launchChrome } from "./target";
 
 const DEFAULT_URL = "https://lumina-web-production-e6ce.up.railway.app/";
@@ -33,6 +33,14 @@ export default function ScriptPanel() {
       setBusy(null);
     }
   }
+
+  // Rehearse reads the whole script without recording; Record makes each scene its own OBS take,
+  // started from the pill.
+  const open = (mode: Mode) =>
+    run("Opening prompter…", async () => {
+      await startSession(mode);
+      await openTeleprompter(true);
+    });
 
   return (
     <section className="space-y-4">
@@ -98,8 +106,11 @@ export default function ScriptPanel() {
           >
             Draft script with Gemini
           </Button>
-          <Button disabled={!!busy || !script} onClick={() => run("Opening prompter…", async () => void (await openTeleprompter(true)))}>
-            Open prompter
+          <Button disabled={!!busy || !script} onClick={() => open("rehearse")}>
+            Rehearse
+          </Button>
+          <Button disabled={!!busy || !script} onClick={() => open("record")}>
+            Record scenes
           </Button>
         </div>
       </div>

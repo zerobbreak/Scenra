@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { closeTeleprompter } from "./capture";
-import { clearStop } from "./engine";
+import { clearStop, restoreObsProfile, stopTake } from "./engine";
 import { onPrompter, sendPrompter } from "./prompter";
 
 // Minimised control bar, design C2: design/scenra-canvas/CompactAction.dc.html (bottom nav).
@@ -66,6 +66,13 @@ export default function Controls() {
     setPaused(!paused);
     sendPrompter({ kind: "pause", paused: !paused });
   }
+  // Ends a scene take that's still recording (nothing to stop in a rehearsal), puts the
+  // presenter's OBS profile back, then closes.
+  async function stop() {
+    await stopTake().catch(() => {});
+    await restoreObsProfile().catch(() => {});
+    await closeTeleprompter();
+  }
   function togglePeek() {
     setPeek(!peek);
     sendPrompter({ kind: "peek", open: !peek });
@@ -97,7 +104,7 @@ export default function Controls() {
           <path d="M5 6h14M5 10h14M5 14h10M5 18h7" {...stroke} strokeWidth="2.2" />
         </svg>
       </ControlButton>
-      <ControlButton label="Stop recording" tone="stop" onClick={() => closeTeleprompter()}>
+      <ControlButton label="Stop recording" tone="stop" onClick={stop}>
         <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
           <path d="M7 7h10v10H7z" fill="#FFFFFF" />
         </svg>

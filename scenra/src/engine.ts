@@ -29,5 +29,8 @@ export type TakeResult = {
   channels: number;
 };
 export const obsStatus = () => invoke<ObsStatus>("obs_status");
-export const startTake = () => invoke<string>("start_take");
-export const stopTake = () => invoke<TakeResult>("stop_take");
+/** `folder` is relative to the takes folder; without it the take gets a timestamped one. */
+export const startTake = (folder?: string) => invoke<string>("start_take", { folder: folder ?? null });
+/** `keepProfile` leaves OBS on the Scenra profile for the next scene of a recorded session. */
+export const stopTake = (keepProfile = false) => invoke<TakeResult>("stop_take", { keepProfile });
+export const restoreObsProfile = () => invoke<void>("restore_obs_profile");

@@ -33,13 +33,35 @@ fn verified(session: &mut Session, pid: u32, selector: &Selector, pace: Pace) ->
     })
 }
 
-/// Clicks with the real cursor and flashes the ripple. Shared by `click_element` and scripts.
-pub fn click(targets: &LaunchedTarget, selector: &Selector, pace: Pace) -> Result<Probe, String> {
+/// Glides to the element and hover-verifies it, without clicking. Scripts call this ahead of the
+/// trigger word so that only the press is left for the word itself.
+pub fn approach(targets: &LaunchedTarget, selector: &Selector, pace: Pace) -> Result<Probe, String> {
     let (pid, mut session) = session(targets)?;
-    let probe = verified(&mut session, pid, selector, pace)?;
+    verified(&mut session, pid, selector, pace)
+}
+
+/// Clicks the element and flashes the ripple. Re-locates it first (no movement); if the page has
+/// moved it since the approach, or the cursor isn't on it, re-aims at fast pace before clicking.
+pub fn press(targets: &LaunchedTarget, selector: &Selector) -> Result<(), String> {
+    let (pid, mut session) = session(targets)?;
+    let located = locate::locate(&mut session, pid, selector)?;
+    let (cx, cy) = input::cursor();
+    let (cx, cy) = (cx as f64, cy as f64);
+    let r = located.screen;
+    let on_it = cx > r.x + 1.0 && cx < r.x + r.width - 1.0 && cy > r.y + 1.0 && cy < r.y + r.height - 1.0;
+    let (x, y) = if on_it {
+        (cx, cy)
+    } else {
+        verified(&mut session, pid, selector, Pace::Fast)?.located.screen.center()
+    };
     input::click().map_err(|e| e.to_string())?;
-    let (x, y) = probe.located.screen.center();
-    ripple::show_at(x, y)?;
+    ripple::show_at(x, y)
+}
+
+/// Approach, then press. Shared by `click_element` and "do it now".
+pub fn click(targets: &LaunchedTarget, selector: &Selector, pace: Pace) -> Result<Probe, String> {
+    let probe = approach(targets, selector, pace)?;
+    press(targets, selector)?;
     Ok(probe)
 }
 

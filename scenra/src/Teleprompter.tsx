@@ -2,11 +2,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { LogicalSize, getCurrentWindow } from "@tauri-apps/api/window";
 import { onPrompter, sendPrompter } from "./prompter";
 import { NextAction, Position, SPEEDS, Speed, useReader } from "./reader";
-import { Line, Scenario, currentScript, onScriptChanged, words } from "./script";
+import { Line, Scenario, Session, currentScript, currentSession, onScriptChanged, onSessionChanged, words } from "./script";
 
 // Compact pill. One line while recording (design C2, CompactAction.dc.html); the control bar's
 // "Show full prompter" expands it to peek ahead (design C3, CompactPeek.dc.html).
 // The script comes from `draft_script` (Gemini); the reader moves through it word by word.
+// In a recording session each scene is its own take, started from the pill (`ReadyToRecord`).
 
 // The magenta strip is the Phase 0 marker `probe_capture` looks for. Keep it strongly magenta
 // and above 1% of the window's area (see capture.rs). Remove it once capture exclusion is proven.
@@ -33,7 +34,7 @@ function CursorIcon({ color, size = 9 }: { color: string; size?: number }) {
   );
 }
 
-function Timer({ elapsed, paused, countdown }: { elapsed: number; paused: boolean; countdown: number }) {
+function Timer({ elapsed, paused, countdown, rec }: { elapsed: number; paused: boolean; countdown: number; rec?: boolean }) {
   if (countdown > 0) {
     return (
       <span className="flex flex-none items-center gap-1.5 font-mono text-xs font-bold text-[#A5B4FC]">
@@ -50,6 +51,7 @@ function Timer({ elapsed, paused, countdown }: { elapsed: number; paused: boolea
   ) : (
     <span className="flex flex-none items-center gap-1.5 font-mono text-xs text-[#FCA5A5]">
       <span className="size-2 rounded-full bg-[#F04438]" />
+      {rec && <span className="font-bold">REC</span>}
       {format(elapsed)}
     </span>
   );
@@ -168,13 +170,43 @@ function Message({ children }: { children: React.ReactNode }) {
   return <p className="m-0 flex flex-1 items-center px-6 text-sm text-[#C9C7C1]">{children}</p>;
 }
 
+function seconds(take: { microphoneSeconds: number }) {
+  return format(Math.round(take.microphoneSeconds));
+}
+
+/// Recording, between scenes: what was just saved, and the button that records the next scene.
+function ReadyToRecord({ script, reader }: { script: Scenario; reader: Reader }) {
+  const { pos } = reader;
+  const last = reader.takes[reader.takes.length - 1];
+  return (
+    <div className="flex flex-1 items-center gap-4 py-3 pr-3 pl-6">
+      <div className="min-w-0 flex-1">
+        <p className="m-0 truncate text-[11px] font-bold tracking-wide text-[#8D8F96]">
+          SCENE {pos.scene + 1}/{script.scenes.length} · READY TO RECORD
+          {last && ` · scene ${last.scene + 1} saved (${seconds(last.take)})`}
+        </p>
+        <p style={SCRIPT_FONT} className="m-0 truncate text-xl font-semibold">{script.scenes[pos.scene].title}</p>
+        {reader.lastError && <p className="m-0 truncate text-[11px] font-semibold text-[#FDE68A]">{reader.lastError}</p>}
+      </div>
+      <button
+        type="button"
+        onClick={reader.startScene}
+        className="flex flex-none cursor-pointer items-center gap-2 rounded-full border-none bg-[#DC2626] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#E23B3B]"
+      >
+        <span className="size-2.5 rounded-full bg-white" />
+        Record scene {pos.scene + 1}
+      </button>
+    </div>
+  );
+}
+
 function OneLine({ script, reader, elapsed, paused }: { script: Scenario; reader: Reader; elapsed: number; paused: boolean }) {
   const { pos } = reader;
   const line = script.scenes[pos.scene].lines[pos.line];
   return (
     <div className="flex flex-1 flex-col justify-center gap-2.5 py-3 pr-3 pl-[18px]">
       <div className="flex items-center gap-3.5">
-        <Timer elapsed={elapsed} paused={paused} countdown={reader.countdown} />
+        <Timer elapsed={elapsed} paused={paused} countdown={reader.countdown} rec={reader.record} />
         <p style={SCRIPT_FONT} className="m-0 min-w-0 flex-1 overflow-hidden py-1 text-xl leading-snug font-semibold whitespace-nowrap">
           <LineWords line={line} spoken={pos.word} scene={pos.scene} lineIndex={pos.line} reader={reader} follow />
         </p>
@@ -182,7 +214,7 @@ function OneLine({ script, reader, elapsed, paused }: { script: Scenario; reader
         <DoItNow reader={reader} />
       </div>
       {reader.lastError ? (
-        <p className="m-0 mr-[54px] truncate text-[11px] font-semibold text-[#FDE68A]">Couldn’t run {reader.lastError}</p>
+        <p className="m-0 mr-[54px] truncate text-[11px] font-semibold text-[#FDE68A]">{reader.lastError}</p>
       ) : (
         <SceneProgress script={script} pos={pos} reader={reader} />
       )}
@@ -220,7 +252,7 @@ function Peek({
   return (
     <div className="flex flex-1 flex-col gap-3.5 pt-4 pr-4 pb-3.5 pl-5">
       <div className="flex items-center gap-3">
-        <Timer elapsed={elapsed} paused={paused} countdown={reader.countdown} />
+        <Timer elapsed={elapsed} paused={paused} countdown={reader.countdown} rec={reader.record} />
         <span className="truncate text-xs font-bold text-[#C9C7C1]">
           Scene {pos.scene + 1} of {script.scenes.length} · {scene.title}
         </span>
@@ -308,28 +340,40 @@ function Peek({
 
 export default function Teleprompter() {
   const [script, setScript] = useState<Scenario | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [paused, setPaused] = useState(false);
   const [peek, setPeek] = useState(false);
   const [speed, setSpeed] = useState<Speed>("Natural");
-  const reader = useReader(script, paused, speed);
+  const reader = useReader(script, session, paused, speed);
 
   useEffect(() => {
-    currentScript().then((s) => {
+    Promise.all([currentScript(), currentSession()]).then(([s, started]) => {
       setScript(s);
+      setSession(started);
       setLoaded(true);
     });
     const unlisten = onScriptChanged((s) => {
       setScript(s);
       setElapsed(0);
     });
+    const unlistenSession = onSessionChanged((started) => {
+      setSession(started);
+      setElapsed(0);
+    });
     return () => {
       unlisten.then((stop) => stop());
+      unlistenSession.then((stop) => stop());
     };
   }, []);
 
-  const running = !!script && !reader.finished && reader.countdown === 0 && !paused;
+  // In a recording the timer shows the current scene's take.
+  useEffect(() => {
+    if (reader.phase === "starting") setElapsed(0);
+  }, [reader.phase]);
+
+  const running = !!script && !reader.finished && reader.phase === "reading" && reader.countdown === 0 && !paused;
   useEffect(() => {
     if (!running) return;
     const id = setInterval(() => setElapsed((s) => s + 1), 1000);
@@ -351,8 +395,9 @@ export default function Teleprompter() {
   }, []);
 
   useEffect(() => {
-    getCurrentWindow().setSize(new LogicalSize(WIDTH, peek && script && !reader.finished ? HEIGHT.peek : HEIGHT.line));
-  }, [peek, script, reader.finished]);
+    const tall = peek && script && !reader.finished && reader.phase === "reading";
+    getCurrentWindow().setSize(new LogicalSize(WIDTH, tall ? HEIGHT.peek : HEIGHT.line));
+  }, [peek, script, reader.finished, reader.phase]);
 
   // The window is frameless, so dragging anywhere except a button moves it.
   function drag(e: React.MouseEvent) {
@@ -364,7 +409,17 @@ export default function Teleprompter() {
   let body: React.ReactNode;
   if (!loaded) body = <Message>Loading script…</Message>;
   else if (!script) body = <Message>No script yet. In Scenra, launch the app and click “Draft script with Gemini”.</Message>;
+  else if (reader.finished && reader.record)
+    body = (
+      <Message>
+        All {script.scenes.length} scenes recorded · {reader.takes.length} take{reader.takes.length === 1 ? "" : "s"} in recordings/takes/{session?.id}
+      </Message>
+    );
   else if (reader.finished) body = <Message>That’s the whole script · {format(elapsed)} · press Retry to read the last scene again.</Message>;
+  else if (reader.phase === "ready") body = <ReadyToRecord script={script} reader={reader} />;
+  else if (reader.phase === "starting")
+    body = <Message>Scene {reader.pos.scene + 1}: waiting for the page to settle, then OBS starts recording…</Message>;
+  else if (reader.phase === "saving") body = <Message>Saving scene {reader.pos.scene + 1}…</Message>;
   else if (peek)
     body = (
       <Peek

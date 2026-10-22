@@ -98,7 +98,7 @@ pub fn run_capture_matrix(app: AppHandle) -> Result<Vec<RowResult>, String> {
     // Leave things as they were, even after a failed row.
     let _ = capture::close_teleprompter(app.clone());
     let take: State<'_, CurrentTake> = app.state();
-    let _ = take::stop_take(take);
+    let _ = take::stop_take(take, None);
     let _ = obs.request("SetInputSettings", json!({ "inputName": source, "inputSettings": { "method": original } }));
     outcome.map(|()| results)
 }
@@ -177,7 +177,7 @@ fn run_row(app: &AppHandle, obs: &mut Obs, capture: &DisplayCapture, row: &Row) 
     let monitor_origin = (f64::from(monitor.position().x), f64::from(monitor.position().y));
     std::thread::sleep(Duration::from_millis(800));
 
-    let take_dir = take::start_take(app.state(), app.state())?;
+    let take_dir = take::start_take(app.state(), app.state(), None)?;
     let dir = Path::new(&take_dir);
     let mut shots = Vec::new();
     let mut shoot = |obs: &mut Obs, label: &str, expect_pill: bool| -> Result<(), String> {
@@ -211,7 +211,7 @@ fn run_row(app: &AppHandle, obs: &mut Obs, capture: &DisplayCapture, row: &Row) 
     std::thread::sleep(Duration::from_millis(300));
     shoot(obs, "4-cursor-over-pill", visible_now)?;
 
-    take::stop_take(app.state())?;
+    take::stop_take(app.state(), None)?;
     close_overlays(app)?;
 
     let passed = shots.iter().all(|s| s.pill_seen == s.expect_pill);

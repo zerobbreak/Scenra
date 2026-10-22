@@ -36,6 +36,7 @@ pub fn run() {
         })
         .manage(target::LaunchedTarget::default())
         .manage(script::CurrentScript::default())
+        .manage(script::CurrentSession::default())
         .manage(take::CurrentTake::default())
         .invoke_handler(tauri::generate_handler![
             capture::open_teleprompter,
@@ -53,7 +54,10 @@ pub fn run() {
             script::ai_status,
             script::draft_script,
             script::current_script,
-            script::run_action,
+            script::start_session,
+            script::current_session,
+            script::approach_action,
+            script::press_action,
             engine::probe_element,
             engine::click_element,
             engine::type_into,
@@ -66,6 +70,7 @@ pub fn run() {
             take::obs_status,
             take::start_take,
             take::stop_take,
+            take::restore_obs_profile,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
