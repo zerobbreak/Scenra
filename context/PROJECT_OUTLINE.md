@@ -2,7 +2,7 @@
 
 > A personal recording director for software demos, focused on apps you build yourself. You teach Scenra a workflow once, it pairs your actions with your voice-over script, and then it replays the workflow with natural cursor movement while you narrate and OBS records each scene.
 
-Status: **architecture finalized → Phase 0 prototype**. Remaining uncertainties are to be resolved by implementation and measurement, not more planning.
+Status: **Phase 0 complete (2026-10-21) → Phase 1 MVP**. Remaining uncertainties are to be resolved by implementation and measurement, not more planning.
 
 ---
 
@@ -205,7 +205,7 @@ screen_px = viewport_origin_screen_px + css_px × devicePixelRatio
 ```
 
 - `devicePixelRatio` already includes both display scaling and browser zoom.
-- **viewport_origin**: the screen position of the content area. Get it from UIA (bounding rect of the Chromium render widget/document element), not from the window rect, which includes borders, title bar, and toolbars.
+- **viewport_origin**: the screen position of the content area, not the window rect, which includes borders, title bar, and toolbars. Phase 0 reads it from the `Chrome_RenderWidgetHostHWND` child window (same rect as UIA's render widget, and the same for Chrome and WebView2).
 - Read `visualViewport` offset/scale to handle pinch-zoom.
 - Scroll the element into view first, then re-measure right before acting.
 - Scenra runs **per-monitor DPI aware (v2)**, so every Win32/UIA coordinate is in physical pixels.
@@ -262,9 +262,9 @@ v1 has no speech recognition. `narration_done: after: Ns` exists for Automatic m
 
 ## 9. Capture, Audio & Output
 
-- Teleprompter: separate Tauri window, `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` on its HWND.
+- Teleprompter: separate Tauri window, `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` on its HWND. It takes the form of the compact pill (design C1–C5, `design/scenra-canvas/README.md`).
 - OBS display or region capture; cursor capture on.
-- Audio: Advanced output, MKV, track 1 = mix, track 2 = mic only. After each scene Scenra extracts track 2 → `microphone.wav` (ffmpeg); optional remux to MP4. One recorder, so the mic is never recorded twice.
+- Audio: Advanced output, MKV, track 1 = mix, track 2 = mic only, using Scenra's own OBS profile. Audio is recorded as PCM, so Scenra demuxes track 2 → `microphone.wav` itself with no ffmpeg (Phase 0, `mkv.rs`); optional remux to MP4 later. One recorder, so the mic is never recorded twice.
 
 ```
 recordings/<project>/<take-timestamp>/scene-03/
@@ -296,15 +296,15 @@ recordings/<project>/<take-timestamp>/scene-03/
 Repo layout: `scenra/` (Tauri app) + `fixtures/demo-target/` (a tiny Tauri app with `data-testid` buttons and a dialog, used as the target).
 
 Exit criteria:
-- [ ] Scenra launches as a Tauri desktop app.
-- [ ] It launches the demo target with a WebView2 debug port and connects over CDP (capability profile shows `cdp: webview2`).
-- [ ] It finds a button by `data-testid`.
-- [ ] Rust maps it to physical screen coordinates; the hover probe passes at 100 % and 150 % scaling.
-- [ ] The InputEngine moves the real cursor smoothly and clicks, with an overlay ripple.
-- [ ] OBS records the interaction via obs-websocket; `microphone.wav` is extracted from track 2.
-- [ ] The teleprompter overlapping the target is absent from the recording; cursor, ripple, and the target's dialog are present. Tested with both OBS display-capture methods.
-- [ ] The emergency stop interrupts mid-motion and mid-typing, even with the UI frozen (simulated hang).
-- [ ] The InputGuard correctly separates tagged Scenra input from real mouse/keyboard input.
+- [x] Scenra launches as a Tauri desktop app.
+- [x] It launches the demo target with a WebView2 debug port and connects over CDP (capability profile shows `cdp: webview2`).
+- [x] It finds a button by `data-testid`.
+- [x] Rust maps it to physical screen coordinates; the hover probe passes at 150 % scaling (the presenter's display; 100 % is deferred to Phase 2).
+- [x] The InputEngine moves the real cursor smoothly and clicks, with an overlay ripple.
+- [x] OBS records the interaction via obs-websocket; `microphone.wav` is extracted from track 2.
+- [x] The teleprompter overlapping the target is absent from the recording; cursor, ripple, and the target's dialog are present. Tested with both OBS display-capture methods.
+- [x] The emergency stop interrupts mid-motion and mid-typing, even with the UI frozen (simulated hang).
+- [x] The InputGuard correctly separates tagged Scenra input from real mouse/keyboard input.
 
 Stretch: the same test against Chrome and against an Electron fixture.
 
@@ -312,7 +312,7 @@ Stretch: the same test against Chrome and against an Electron fixture.
 Teach (continuous) → scene split → Gemini alignment → Rehearse → Record per scene, with initial-state checks, fast-forward/setup scripts, manual checkpoints, pause-and-propose recovery, and secrets via Credential Manager.
 
 ### Phase 2 — Coverage
-UIA locator for native windows/dialogs; vision fallback with review; speech-based narration completion; retake from the Takes list.
+UIA locator for native windows/dialogs; hover probe and capture matrix at other display scalings (100 %, mixed-DPI multi-monitor); vision fallback with review; speech-based narration completion; retake from the Takes list.
 
 ### Phase 3 — Polish
 Zoom/highlight effects, take stitching, chapter markers, Claude provider, TTS, third-party apps, Playwright-over-CDP if needed, other OSes.
