@@ -10,7 +10,11 @@
 //! pixels of the magenta marker band the teleprompter draws. Marker found = window leaks.
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use crate::settings;
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use windows::Win32::Graphics::Dwm::{
+    DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute,
+};
 use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
@@ -24,11 +28,21 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 pub const TELEPROMPTER: &str = "teleprompter";
+pub const CONTROLS: &str = "controls";
 const MIN_BUILD: u32 = 19041;
+/// Logical px. Keep in sync with the layouts in `Teleprompter.tsx` and `Controls.tsx`.
+const PILL_SIZE: (f64, f64) = (840.0, 112.0);
+const PILL_MARGIN: f64 = 30.0;
+/// Four 44 px buttons, 6 px gaps and padding, 1 px border.
+const CONTROLS_SIZE: (f64, f64) = (208.0, 58.0);
+const CONTROLS_MARGIN: f64 = 40.0;
 
-/// Marker colour drawn by the teleprompter (#FF00FF). Keep in sync with `Teleprompter.tsx`.
-const MARKER_RGB: (u8, u8, u8) = (0xFF, 0x00, 0xFF);
-const MARKER_TOLERANCE: u8 = 12;
+/// The teleprompter draws a #FF00FF strip (see `Teleprompter.tsx`). WebView2 colour-manages
+/// for the display profile, so on screen it can land well off that value (#EA33F7 was seen).
+/// Match "strong magenta" instead: red and blue high, green low.
+pub(crate) fn is_marker(r: u8, g: u8, b: u8) -> bool {
+    r >= 0xC0 && b >= 0xC0 && g <= 0x70
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,6 +85,22 @@ fn os_build() -> u32 {
     info.dwBuildNumber
 }
 
+/// Frameless windows have square corners; ask DWM for the Windows 11 rounded ones instead of a
+/// transparent window, so capture exclusion is tested on a plain, non-layered HWND.
+/// Windows 10 ignores the attribute and keeps square corners.
+fn round_corners(window: &WebviewWindow) -> Result<(), String> {
+    let preference = DWMWCP_ROUND;
+    let _ = unsafe {
+        DwmSetWindowAttribute(
+            hwnd(window)?,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            (&raw const preference).cast(),
+            size_of_val(&preference) as u32,
+        )
+    };
+    Ok(())
+}
+
 fn set_excluded(window: &WebviewWindow, excluded: bool) -> Result<(), String> {
     let affinity = if excluded { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE };
     unsafe { SetWindowDisplayAffinity(hwnd(window)?, affinity) }.map_err(err)
@@ -95,34 +125,114 @@ fn status(app: &AppHandle) -> Result<CaptureStatus, String> {
     })
 }
 
-#[tauri::command]
-pub fn open_teleprompter(app: AppHandle, excluded: bool) -> Result<CaptureStatus, String> {
-    let window = match app.get_webview_window(TELEPROMPTER) {
-        Some(window) => window,
-        None => WebviewWindowBuilder::new(&app, TELEPROMPTER, WebviewUrl::default())
-            .title("Scenra Teleprompter")
-            .inner_size(560.0, 380.0)
-            .always_on_top(true)
-            .build()
-            .map_err(err)?,
+#[derive(Clone, Copy)]
+enum Edge {
+    Top,
+    Bottom,
+}
+
+/// Each overlay's designed size (logical px) and where it sits.
+fn layout(label: &str) -> ((f64, f64), Edge, f64) {
+    if label == CONTROLS {
+        (CONTROLS_SIZE, Edge::Bottom, CONTROLS_MARGIN)
+    } else {
+        (PILL_SIZE, Edge::Top, PILL_MARGIN)
+    }
+}
+
+/// Keep at least this much of the work area free on each side, logical px.
+const SIDE_GAP: f64 = 16.0;
+
+/// Opens (or reuses) a frameless, always-on-top overlay window.
+fn overlay(app: &AppHandle, label: &str, title: &str) -> Result<WebviewWindow, String> {
+    if let Some(window) = app.get_webview_window(label) {
+        return Ok(window);
+    }
+    let (size, _, _) = layout(label);
+    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::default())
+        .title(title)
+        .inner_size(size.0, size.1)
+        .decorations(false)
+        .resizable(false)
+        .skip_taskbar(true)
+        .always_on_top(true)
+        .build()
+        .map_err(err)?;
+    fit(app, &window, label)?;
+    round_corners(&window)?;
+    Ok(window)
+}
+
+/// Sizes the overlay by the presenter's zoom (shrunk if it wouldn't fit the monitor's work area)
+/// and centres it horizontally, `margin` logical px from its edge. Windows display scaling is
+/// applied on top by the logical → physical conversion, so this works at any scaling.
+fn fit(app: &AppHandle, window: &WebviewWindow, label: &str) -> Result<(), String> {
+    let (size, edge, margin) = layout(label);
+    let monitor = window.current_monitor().map_err(err)?.or(app.primary_monitor().map_err(err)?);
+    let Some(monitor) = monitor else { return Ok(()) };
+    let scale = monitor.scale_factor();
+    let area = monitor.work_area();
+    let origin = area.position.to_logical::<f64>(scale);
+    let area = area.size.to_logical::<f64>(scale);
+    let wanted = settings::load(app).overlay_zoom.clamp(settings::MIN_ZOOM, settings::MAX_ZOOM);
+    let zoom = wanted.min((area.width - 2.0 * SIDE_GAP) / PILL_SIZE.0).max(0.5);
+    let (w, h) = (size.0 * zoom, size.1 * zoom);
+    window.set_size(LogicalSize::new(w, h)).map_err(err)?;
+    window.set_zoom(zoom).map_err(err)?;
+    let x = origin.x + (area.width - w) / 2.0;
+    let y = match edge {
+        Edge::Top => origin.y + margin,
+        Edge::Bottom => origin.y + area.height - h - margin,
     };
-    set_excluded(&window, excluded)?;
-    window.set_focus().map_err(err)?;
+    window.set_position(LogicalPosition::new(x, y)).map_err(err)
+}
+
+/// Re-fits the open overlays after the zoom setting changed.
+pub fn refit(app: &AppHandle) -> Result<(), String> {
+    for window in overlays(app) {
+        fit(app, &window, window.label())?;
+    }
+    Ok(())
+}
+
+/// The pill and its control bar are one unit: opened, excluded and closed together.
+fn overlays(app: &AppHandle) -> impl Iterator<Item = WebviewWindow> {
+    [TELEPROMPTER, CONTROLS].into_iter().filter_map(|label| app.get_webview_window(label))
+}
+
+// Async: on Windows, building a webview window inside a sync command (main thread) leaves the
+// new webview stuck on about:blank.
+#[tauri::command(async)]
+pub fn open_teleprompter(app: AppHandle, excluded: bool) -> Result<CaptureStatus, String> {
+    // Design C2: the script pill near the top, the minimised control bar near the bottom.
+    let pill = overlay(&app, TELEPROMPTER, "Scenra Teleprompter")?;
+    overlay(&app, CONTROLS, "Scenra Controls")?;
+    for window in overlays(&app) {
+        set_excluded(&window, excluded)?;
+    }
+    pill.set_focus().map_err(err)?;
     status(&app)
 }
 
 #[tauri::command]
 pub fn close_teleprompter(app: AppHandle) -> Result<CaptureStatus, String> {
-    if let Some(window) = app.get_webview_window(TELEPROMPTER) {
+    for window in overlays(&app) {
         window.destroy().map_err(err)?;
     }
-    Ok(CaptureStatus { open: false, affinity: None, excluded: false, ..status(&app)? })
+    // The control bar's Stop button closes the overlays too; tell the debug panel.
+    app.emit("teleprompter-closed", ()).map_err(err)?;
+    // Off the main thread `destroy` is asynchronous and the dying window has no HWND, so don't
+    // ask it for its affinity.
+    let build = os_build();
+    Ok(CaptureStatus { open: false, affinity: None, excluded: false, os_build: build, supported: build >= MIN_BUILD })
 }
 
 #[tauri::command]
 pub fn set_capture_excluded(app: AppHandle, excluded: bool) -> Result<CaptureStatus, String> {
-    let window = app.get_webview_window(TELEPROMPTER).ok_or("teleprompter is not open")?;
-    set_excluded(&window, excluded)?;
+    app.get_webview_window(TELEPROMPTER).ok_or("teleprompter is not open")?;
+    for window in overlays(&app) {
+        set_excluded(&window, excluded)?;
+    }
     status(&app)
 }
 
@@ -142,12 +252,11 @@ pub fn probe_capture(app: AppHandle) -> Result<ProbeResult, String> {
     }
 
     let pixels = grab_screen(rect.left, rect.top, w, h)?;
-    let near = |a: u8, b: u8| a.abs_diff(b) <= MARKER_TOLERANCE;
     let marker_pixels = pixels
         .as_chunks::<4>()
         .0
         .iter()
-        .filter(|p| near(p[2], MARKER_RGB.0) && near(p[1], MARKER_RGB.1) && near(p[0], MARKER_RGB.2))
+        .filter(|p| is_marker(p[2], p[1], p[0]))
         .count();
     let total_pixels = (w * h) as usize;
 
@@ -155,7 +264,7 @@ pub fn probe_capture(app: AppHandle) -> Result<ProbeResult, String> {
         rect: [rect.left, rect.top, w, h],
         marker_pixels,
         total_pixels,
-        // The band covers ~10% of the window; 1% avoids false hits from stray magenta.
+        // The strip covers ~3.5% of the window; 1% avoids false hits from stray magenta.
         leaks: marker_pixels * 100 > total_pixels,
     })
 }
