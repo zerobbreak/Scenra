@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cue mascot</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="display: inline-flex; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; color: #F2EFE8">
+<svg width="{{size}}" height="{{size}}" viewBox="0 0 120 120" role="img" aria-label="Cue, {{label}}">
+<ellipse cx="60" cy="113" rx="28" ry="4" fill="#000000" opacity="0.3"></ellipse>
+
+<g display="{{v.glow}}"><circle cx="61" cy="11" r="14" fill="#818CF8" opacity="0.32"></circle></g>
+<g display="{{v.ripple}}"><circle cx="57" cy="7" r="9" fill="none" stroke="#A5B4FC" stroke-width="2"></circle><circle cx="57" cy="7" r="15" fill="none" stroke="#A5B4FC" stroke-width="1.5" opacity="0.5"></circle></g>
+
+<g transform="{{tf}}">
+<g fill="none" stroke="{{body}}" stroke-width="8" stroke-linecap="round">
+<g display="{{v.armsDown}}"><path d="M26 72Q14 76 14 88"></path><path d="M94 72Q106 76 106 88"></path></g>
+<g display="{{v.armsPoint}}"><path d="M26 72Q14 76 14 88"></path><path d="M94 70Q106 66 112 56"></path></g>
+<g display="{{v.armsUp}}"><path d="M26 66Q12 58 12 44"></path><path d="M94 66Q108 58 108 44"></path></g>
+<g display="{{v.armsScratch}}"><path d="M26 66Q10 56 24 40"></path><path d="M94 72Q106 76 106 88"></path></g>
+</g>
+<path d="M60 38V22" stroke="{{body}}" stroke-width="4" stroke-linecap="round"></path>
+<path d="M55 3l13 9-6 1.5L59.5 20z" fill="#FFFFFF" stroke="{{body}}" stroke-width="2" stroke-linejoin="round"></path>
+<rect x="38" y="97" width="14" height="11" rx="5.5" fill="{{body}}"></rect>
+<rect x="68" y="97" width="14" height="11" rx="5.5" fill="{{body}}"></rect>
+<rect x="22" y="36" width="76" height="66" rx="28" fill="{{body}}"></rect>
+<path d="M33 47q3-5 10-6" fill="none" stroke="#FFFFFF" stroke-opacity="0.4" stroke-width="3" stroke-linecap="round"></path>
+<rect x="32" y="49" width="56" height="38" rx="15" fill="#0E1013"></rect>
+<g display="{{v.live}}"><circle cx="84" cy="43" r="7" fill="#F04438" opacity="0.35"></circle><circle cx="84" cy="43" r="3.5" fill="#F04438"></circle></g>
+
+<g fill="#E0E7FF" stroke="#E0E7FF" stroke-linecap="round" stroke-linejoin="round">
+<g display="{{v.ready}}"><rect x="41" y="56" width="9" height="14" rx="4.5" stroke="none"></rect><rect x="70" y="56" width="9" height="14" rx="4.5" stroke="none"></rect><path d="M55 77q5 4 10 0" fill="none" stroke-width="2.5"></path></g>
+<g display="{{v.reading}}"><rect x="45" y="56" width="9" height="14" rx="4.5" stroke="none"></rect><rect x="74" y="56" width="9" height="14" rx="4.5" stroke="none"></rect><ellipse cx="64" cy="79" rx="2.5" ry="2" stroke="none"></ellipse></g>
+<g display="{{v.aiming}}"><rect x="41" y="60" width="9" height="6" rx="3" stroke="none"></rect><rect x="70" y="60" width="9" height="6" rx="3" stroke="none"></rect><path d="M55 79H65" fill="none" stroke-width="2.5"></path></g>
+<g display="{{v.clicking}}"><path d="M42 58l8 5-8 5" fill="none" stroke-width="3"></path><path d="M78 58l-8 5 8 5" fill="none" stroke-width="3"></path><path d="M54 77q6 5 12 0" fill="none" stroke-width="2.5"></path></g>
+<g display="{{v.puzzled}}"><rect x="39" y="54" width="12" height="17" rx="6" stroke="none"></rect><rect x="71" y="60" width="8" height="8" rx="4" stroke="none"></rect><path d="M51 79q3-3 6 0t6 0t6 0" fill="none" stroke-width="2.5"></path></g>
+<g display="{{v.relieved}}"><path d="M41 65q4.5-7 9 0" fill="none" stroke-width="3"></path><path d="M70 65q4.5-7 9 0" fill="none" stroke-width="3"></path><path d="M53 75q7 7 14 0" fill="none" stroke-width="2.5"></path></g>
+<g display="{{v.celebrating}}"><path d="M41 65q4.5-7 9 0" fill="none" stroke-width="3"></path><path d="M70 65q4.5-7 9 0" fill="none" stroke-width="3"></path><path d="M52 74q8 10 16 0z" stroke="none"></path></g>
+<g display="{{v.sleeping}}"><path d="M41 64h9" fill="none" stroke-width="3"></path><path d="M70 64h9" fill="none" stroke-width="3"></path><ellipse cx="60" cy="79" rx="2" ry="1.5" stroke="none"></ellipse></g>
+</g>
+</g>
+
+<g display="{{v.question}}"><text x="100" y="34" font-size="26" font-weight="800" fill="#F59E0B" font-family="Plus Jakarta Sans, sans-serif">?</text></g>
+<g display="{{v.check}}"><circle cx="102" cy="32" r="10" fill="#34D399"></circle><path d="M97 32l3.5 3.5 6.5-7" fill="none" stroke="#06281C" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"></path></g>
+<g display="{{v.sparkles}}" fill="#FBBF24">
+<path transform="translate(14 22)" d="M0-7L1.8-1.8 7 0 1.8 1.8 0 7-1.8 1.8-7 0-1.8-1.8z"></path>
+<path transform="translate(106 18) scale(0.8)" d="M0-7L1.8-1.8 7 0 1.8 1.8 0 7-1.8 1.8-7 0-1.8-1.8z"></path>
+<path transform="translate(112 70) scale(0.6)" d="M0-7L1.8-1.8 7 0 1.8 1.8 0 7-1.8 1.8-7 0-1.8-1.8z"></path>
+<path transform="translate(6 70) scale(0.55)" d="M0-7L1.8-1.8 7 0 1.8 1.8 0 7-1.8 1.8-7 0-1.8-1.8z"></path>
+</g>
+<g display="{{v.zz}}" fill="#8D8F96" font-family="Plus Jakarta Sans, sans-serif" font-weight="800"><text x="94" y="36" font-size="15">z</text><text x="105" y="22" font-size="11">z</text></g>
+</svg>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"mood":{"editor":"enum","options":["ready","reading","aiming","clicking","puzzled","relieved","celebrating","sleeping"],"default":"ready"},"color":{"editor":"color","options":["#4F46E5","#0891B2","#DB2777"],"default":"#4F46E5"},"size":{"editor":"int","min":32,"max":400,"default":200},"$preview":{"width":200,"height":200}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const mood = this.props.mood ?? 'ready';
+    const accent = this.props.color ?? '#4F46E5';
+    const show = (list) => (list.includes(mood) ? 'inline' : 'none');
+    const labels = {
+      ready: 'ready', reading: 'reading along', aiming: 'about to act', clicking: 'clicking',
+      puzzled: 'puzzled', relieved: 'relieved', celebrating: 'celebrating', sleeping: 'dozing'
+    };
+    const transforms = {
+      aiming: 'rotate(-6 60 104)',
+      clicking: 'translate(60 104) scale(1.08 0.9) translate(-60 -104)',
+      celebrating: 'translate(0 -6)'
+    };
+    return {
+      size: this.props.size ?? 200,
+      label: labels[mood] || mood,
+      body: mood === 'puzzled' ? '#F59E0B' : mood === 'sleeping' ? '#3B3A6B' : accent,
+      tf: transforms[mood] || 'translate(0 0)',
+      v: {
+        ready: show(['ready']), reading: show(['reading']), aiming: show(['aiming']),
+        clicking: show(['clicking']), puzzled: show(['puzzled']), relieved: show(['relieved']),
+        celebrating: show(['celebrating']), sleeping: show(['sleeping']),
+        armsDown: show(['ready', 'reading', 'relieved', 'sleeping']),
+        armsPoint: show(['aiming', 'clicking']),
+        armsUp: show(['celebrating']),
+        armsScratch: show(['puzzled']),
+        live: show(['reading', 'aiming', 'clicking']),
+        glow: show(['aiming']), ripple: show(['clicking']),
+        question: show(['puzzled']), check: show(['relieved']),
+        sparkles: show(['celebrating']), zz: show(['sleeping'])
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Scenra compact paused</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,600&amp;family=Plus+Jakarta+Sans:wght@500;600;700;800&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0E1013}
+</style>
+</helmet>
+<div style="position: relative; width: 1280px; height: 800px; overflow: hidden; background: #0E1013; color: #F2EFE8; font-family: 'Plus Jakarta Sans', system-ui, sans-serif">
+
+<section aria-label="Your app, recording paused" style="position: absolute; left: 20px; top: 20px; right: 20px; bottom: 20px; border-radius: 14px; background: #FFFFFF; overflow: hidden; outline: 3px solid #F59E0B; color: #1B1A1F">
+<div style="display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: #F1EFEA; border-bottom: 1px solid #E4E2DC">
+<span style="width: 10px; height: 10px; border-radius: 50%; background: #D5D2CB"></span><span style="width: 10px; height: 10px; border-radius: 50%; background: #D5D2CB"></span><span style="width: 10px; height: 10px; border-radius: 50%; background: #D5D2CB"></span>
+<span style="margin-left: 8px; font-size: 13px; color: #5E5B66">Lumina · recording area</span>
+</div>
+<div style="padding: 330px 60px 0; display: flex; flex-direction: column; gap: 22px">
+<div style="display: flex; align-items: center; justify-content: space-between">
+<div style="height: 20px; width: 220px; border-radius: 6px; background: #D9D6CE"></div>
+<span style="position: relative; padding: 12px 20px; border-radius: 10px; background: #1B1A1F; color: #FFFFFF; font-size: 15px; font-weight: 700; outline: 2px dashed #F59E0B; outline-offset: 5px">Save note
+<span style="position: absolute; right: -6px; top: -40px; padding: 4px 9px; border-radius: 7px; background: #F59E0B; color: #1C1303; font-size: 11px; font-weight: 800; white-space: nowrap">Suggested match</span></span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px">
+<div style="height: 150px; border-radius: 14px; background: #F3F1EC"></div><div style="height: 150px; border-radius: 14px; background: #F3F1EC"></div><div style="height: 150px; border-radius: 14px; background: #F3F1EC"></div>
+</div>
+</div>
+</section>
+
+<section role="dialog" aria-labelledby="cp-h" style="position: absolute; top: 30px; left: 50%; transform: translateX(-50%); width: 820px; box-sizing: border-box; display: flex; flex-direction: column; gap: 12px; padding: 12px; border-radius: 24px; background: #0E1013; box-shadow: 0 20px 56px rgba(0,0,0,0.5)">
+<div style="display: flex; align-items: center; gap: 12px; padding: 4px 4px 4px 8px">
+<span aria-hidden="true" style="width: 36px; height: 36px; flex: none; border-radius: 12px; background: #F59E0B; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24"><path d="M9 5v14M15 5v14" fill="none" stroke="#1C1303" stroke-width="2.8" stroke-linecap="round"></path></svg></span>
+<div style="flex: 1; display: flex; flex-direction: column; gap: 2px">
+<h2 id="cp-h" style="margin: 0; font-size: 16px; font-weight: 800">Paused · Scenra couldn’t find “Save”</h2>
+<span style="font-size: 12px; color: #B5B3AD">Stopped at 00:51 instead of guessing. OBS is paused too, nothing is lost.</span>
+</div>
+<span style="flex: none; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #FDE68A">00:51</span>
+</div>
+
+<div style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 16px; background: #1F1A10; border: 1px solid #5C4410">
+<span style="flex: none; font-size: 11px; font-weight: 800; letter-spacing: 0.08em; color: #F59E0B">SUGGESTION</span>
+<span style="flex: 1; font-size: 13px; line-height: 1.45; color: #F2EFE8">“Save note” in the top bar looks like a renamed “Save”. It’s outlined in your app.</span>
+</div>
+
+<div style="display: flex; gap: 8px">
+<button type="button" style="font: inherit; flex: 1.4; height: 48px; border-radius: 14px; border: none; background: #F59E0B; color: #1C1303; font-size: 14px; font-weight: 800; cursor: pointer">Use “Save note” &amp; continue</button>
+<button type="button" style="font: inherit; flex: 1; height: 48px; border-radius: 14px; border: 1px solid #2A2D33; background: #1A1C21; color: #F2EFE8; font-size: 13px; font-weight: 700; cursor: pointer">I’ll click it</button>
+<button type="button" style="font: inherit; flex: 1; height: 48px; border-radius: 14px; border: 1px solid #2A2D33; background: #1A1C21; color: #F2EFE8; font-size: 13px; font-weight: 700; cursor: pointer">Skip action</button>
+<button type="button" style="font: inherit; flex: 1; height: 48px; border-radius: 14px; border: 1px solid #2A2D33; background: #1A1C21; color: #F2EFE8; font-size: 13px; font-weight: 700; cursor: pointer">Retake scene</button>
+</div>
+
+<p style="margin: 0; padding: 2px 8px 4px; font-family: 'Literata', Georgia, serif; font-size: 14px; line-height: 1.45; color: #8D8F96">You’ll pick up at: <span style="color: #F2EFE8">“Let’s give it a name so we can find it later.”</span></p>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

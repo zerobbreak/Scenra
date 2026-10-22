@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Scenra compact peek ahead</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,600&amp;family=Plus+Jakarta+Sans:wght@500;600;700;800&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0E1013}
+</style>
+</helmet>
+<div style="position: relative; width: 1280px; height: 800px; overflow: hidden; background: #0E1013; color: #F2EFE8; font-family: 'Plus Jakarta Sans', system-ui, sans-serif">
+
+<section aria-label="Your app, being recorded" style="position: absolute; left: 20px; top: 20px; right: 20px; bottom: 20px; border-radius: 14px; background: #FFFFFF; overflow: hidden; outline: 3px solid #F04438; color: #1B1A1F">
+<div style="display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: #F1EFEA; border-bottom: 1px solid #E4E2DC">
+<span style="width: 10px; height: 10px; border-radius: 50%; background: #D5D2CB"></span><span style="width: 10px; height: 10px; border-radius: 50%; background: #D5D2CB"></span><span style="width: 10px; height: 10px; border-radius: 50%; background: #D5D2CB"></span>
+<span style="margin-left: 8px; font-size: 13px; color: #5E5B66">Lumina · recording area</span>
+</div>
+<div style="padding: 190px 60px 0; display: flex; flex-direction: column; gap: 22px">
+<div style="display: flex; align-items: center; justify-content: space-between">
+<div style="height: 20px; width: 220px; border-radius: 6px; background: #D9D6CE"></div>
+<span style="padding: 12px 20px; border-radius: 10px; background: #1B1A1F; color: #FFFFFF; font-size: 15px; font-weight: 700">New Recording</span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px">
+<div style="height: 150px; border-radius: 14px; background: #F3F1EC"></div><div style="height: 150px; border-radius: 14px; background: #F3F1EC"></div><div style="height: 150px; border-radius: 14px; background: #F3F1EC"></div>
+<div style="height: 150px; border-radius: 14px; background: #F3F1EC"></div><div style="height: 150px; border-radius: 14px; background: #F3F1EC"></div><div style="height: 150px; border-radius: 14px; background: #F3F1EC"></div>
+</div>
+</div>
+</section>
+
+<section aria-label="Script, peeking ahead (only you see this)" style="position: absolute; top: 30px; left: 50%; transform: translateX(-50%); width: 820px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px; padding: 16px 16px 14px 20px; border-radius: 24px; background: #0E1013; box-shadow: 0 20px 56px rgba(0,0,0,0.5)">
+<div style="display: flex; align-items: center; gap: 12px">
+<span style="display: flex; align-items: center; gap: 6px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #FCA5A5"><span style="width: 8px; height: 8px; border-radius: 50%; background: #F04438"></span>00:44</span>
+<span style="font-size: 12px; font-weight: 700; color: #C9C7C1">Scene 2 of 5 · Create a new note</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; color: #8D8F96">Hold <kbd style="font-family: 'JetBrains Mono', monospace; font-size: 11px; padding: 2px 6px; border-radius: 5px; background: #23262C; color: #F2EFE8">Ctrl</kbd> to peek</span>
+<button type="button" aria-label="Collapse to one line" style="width: 36px; height: 36px; border-radius: 50%; border: none; background: #23262C; cursor: pointer; display: flex; align-items: center; justify-content: center"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 10L8 5.5l4.5 4.5" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+</div>
+
+<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 12px; font-family: 'Literata', Georgia, serif">
+<li style="display: flex; gap: 14px; align-items: baseline">
+<span style="flex: none; width: 22px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8D8F96">1</span>
+<span style="font-size: 15px; line-height: 1.5; color: #8D8F96">Now let’s create a new note. <span style="font-family: 'Plus Jakarta Sans', sans-serif; font-size: 11px; font-weight: 700; color: #6EE7B7">✓ clicked New Recording</span></span>
+</li>
+<li style="display: flex; gap: 14px; align-items: baseline; padding: 12px 14px 12px 0; margin-left: -6px; padding-left: 6px; border-radius: 14px; background: #17191D">
+<span style="flex: none; width: 22px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #A5B4FC">2</span>
+<span style="font-size: 21px; line-height: 1.45; font-weight: 600; color: #FFFFFF"><span style="color: #8D8F96">Lumina allows you to</span> record meetings
+<span style="display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; padding: 3px 10px 3px 6px; border-radius: 999px; border: 1.5px solid #6366F1; font-family: 'Plus Jakarta Sans', sans-serif; font-size: 12px; font-weight: 700; color: #C7D2FE"><svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 12h10M3 8h7M3 4h10" stroke="#A5B4FC" stroke-width="2" stroke-linecap="round"></path></svg>Type “Product sync”</span>
+and automatically generate structured notes.</span>
+</li>
+<li style="display: flex; gap: 14px; align-items: baseline">
+<span style="flex: none; width: 22px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8D8F96">3</span>
+<span style="font-size: 17px; line-height: 1.5; color: #C9C7C1">Let’s give it a name so we can find it
+<span style="display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; padding: 2px 9px 2px 5px; border-radius: 999px; border: 1.5px solid #3B3A6B; font-family: 'Plus Jakarta Sans', sans-serif; font-size: 11px; font-weight: 700; color: #A5B4FC"><svg width="8" height="10" viewBox="0 0 18 22" aria-hidden="true"><path d="M2 2l13 9-6 1.5L6.5 19z" fill="#A5B4FC"></path></svg>Click Save</span>
+later.</span>
+</li>
+</ol>
+
+<div style="display: flex; align-items: center; gap: 10px; padding-top: 10px; border-top: 1px solid #1F2227">
+<div role="img" aria-label="Scenes 1 and 2 of 5; scene 2 in progress" style="flex: 1; display: flex; gap: 4px; height: 6px">
+<span style="flex: 2; border-radius: 3px; background: #34D399"></span>
+<span style="flex: 3; border-radius: 3px; background: linear-gradient(90deg, #34D399 45%, #23262C 45%)"></span>
+<span style="flex: 2; border-radius: 3px; background: #23262C"></span>
+<span style="flex: 3; border-radius: 3px; background: #23262C"></span>
+<span style="flex: 2; border-radius: 3px; background: #23262C"></span>
+</div>
+<span style="font-size: 12px; color: #8D8F96">2 actions left in this scene</span>
+<span style="display: flex; gap: 2px; padding: 3px; border-radius: 9px; background: #1A1C21">
+<button type="button" style="font: inherit; padding: 4px 9px; border-radius: 7px; border: none; background: transparent; color: #C9C7C1; font-size: 11px; font-weight: 600; cursor: pointer">Slow</button>
+<button type="button" aria-pressed="true" style="font: inherit; padding: 4px 9px; border-radius: 7px; border: none; background: #F2EFE8; color: #0E1013; font-size: 11px; font-weight: 700; cursor: pointer">Natural</button>
+<button type="button" style="font: inherit; padding: 4px 9px; border-radius: 7px; border: none; background: transparent; color: #C9C7C1; font-size: 11px; font-weight: 600; cursor: pointer">Fast</button>
+</span>
+</div>
+</section>
+
+<nav aria-label="Controls (minimised)" style="position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; padding: 6px; border-radius: 18px; background: rgba(14,16,19,0.85); backdrop-filter: blur(18px); border: 1px solid rgba(255,255,255,0.1)">
+<button type="button" aria-label="Pause" style="width: 44px; height: 44px; border-radius: 13px; border: none; background: #33363D; cursor: pointer; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5v14M15 5v14" fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round"></path></svg></button>
+<button type="button" aria-label="Show full prompter" aria-pressed="true" style="width: 44px; height: 44px; border-radius: 13px; border: none; background: #4F46E5; cursor: pointer; display: flex; align-items: center; justify-content: center"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 10h14M5 14h10M5 18h7" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round"></path></svg></button>
+<button type="button" aria-label="Stop recording" style="width: 44px; height: 44px; border-radius: 13px; border: none; background: #DC2626; cursor: pointer; display: flex; align-items: center; justify-content: center"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v10H7z" fill="#FFFFFF"></path></svg></button>
+</nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

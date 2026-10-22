@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cue in the compact pill</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,600&amp;family=Plus+Jakarta+Sans:wght@500;600;700;800&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0E1013}
+</style>
+</helmet>
+<div style="position: relative; width: 1280px; height: 800px; overflow: hidden; background: #0E1013; color: #F2EFE8; font-family: 'Plus Jakarta Sans', system-ui, sans-serif">
+
+<section aria-label="Your app" style="position: absolute; left: 20px; top: 20px; right: 20px; bottom: 120px; border-radius: 14px; background: #FFFFFF; overflow: hidden; outline: 3px solid {{frame}}; color: #1B1A1F">
+<div style="display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: #F1EFEA; border-bottom: 1px solid #E4E2DC">
+<span style="width: 10px; height: 10px; border-radius: 50%; background: #D5D2CB"></span><span style="width: 10px; height: 10px; border-radius: 50%; background: #D5D2CB"></span><span style="width: 10px; height: 10px; border-radius: 50%; background: #D5D2CB"></span>
+<span style="margin-left: 8px; font-size: 13px; color: #5E5B66">Lumina · recording area</span>
+</div>
+<div style="padding: 200px 60px 0; display: flex; flex-direction: column; gap: 22px">
+<div style="display: flex; align-items: center; justify-content: space-between">
+<div style="height: 20px; width: 220px; border-radius: 6px; background: #D9D6CE"></div>
+<span style="padding: 12px 20px; border-radius: 10px; background: #1B1A1F; color: #FFFFFF; font-size: 15px; font-weight: 700">New Recording</span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px">
+<div style="height: 150px; border-radius: 14px; background: #F3F1EC"></div><div style="height: 150px; border-radius: 14px; background: #F3F1EC"></div><div style="height: 150px; border-radius: 14px; background: #F3F1EC"></div>
+</div>
+</div>
+</section>
+
+<section aria-label="Script pill with Cue (only you see this)" aria-live="polite" style="position: absolute; top: 30px; left: 50%; transform: translateX(-50%); width: 860px; box-sizing: border-box; display: flex; align-items: center; gap: 14px; padding: 8px 12px 8px 8px; border-radius: 28px; background: #0E1013; box-shadow: 0 16px 44px rgba(0,0,0,0.45)">
+<span style="flex: none; width: 76px; height: 76px; border-radius: 22px; background: #17191D; display: flex; align-items: center; justify-content: center">
+<dc-import name="Cue" mood="{{mood}}" size="68" hint-size="68px,68px"></dc-import>
+</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px">
+<span style="font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: #8D8F96">{{cur.status}}</span>
+<p style="margin: 0; font-family: 'Literata', Georgia, serif; font-size: 19px; font-weight: 600; line-height: 1.35; color: #FFFFFF">{{cur.line}}</p>
+</div>
+<span style="flex: none; padding: 7px 12px; border-radius: 999px; background: {{cur.chipBg}}; color: {{cur.chipFg}}; font-size: 12px; font-weight: 700">{{cur.chip}}</span>
+<button type="button" onClick="{{next}}" aria-label="Next moment" style="width: 44px; height: 44px; flex: none; border-radius: 50%; border: none; background: #4F46E5; cursor: pointer; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+</section>
+
+<nav aria-label="Step through a take" style="position: absolute; left: 20px; right: 20px; bottom: 24px; display: flex; align-items: center; gap: 12px">
+<span style="flex: none; font-size: 12px; font-weight: 700; color: #8D8F96">Step through a take</span>
+<div style="flex: 1; display: flex; gap: 6px">
+<sc-for list="{{moods}}" as="m" hint-placeholder-count="8">
+<button type="button" onClick="{{m.pick}}" aria-pressed="{{m.pressed}}" style="font: inherit; flex: 1; height: 48px; border-radius: 14px; border: 1px solid {{m.border}}; background: {{m.bg}}; color: #F2EFE8; font-size: 12px; font-weight: 700; cursor: pointer">{{m.label}}</button>
+</sc-for>
+</div>
+</nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"mood":{"editor":"enum","options":["ready","reading","aiming","clicking","puzzled","relieved","celebrating","sleeping"],"default":"aiming"},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const steps = [
+      { key: 'ready', label: 'Ready', status: 'STARTS IN 3 · SCENE 1 OF 5', line: 'Welcome to Lumina, an AI-powered note-taking application.', chip: 'Start now', chipBg: '#33363D', chipFg: '#F2EFE8', frame: '#4C4F57' },
+      { key: 'reading', label: 'Reading', status: 'REC 00:38 · SCENE 2 OF 5', line: 'Now let’s create a new note.', chip: 'Next: Click New Recording', chipBg: '#23262C', chipFg: '#C7D2FE', frame: '#F04438' },
+      { key: 'aiming', label: 'About to act', status: 'REC 00:41 · SCENE 2 OF 5', line: 'Now let’s create a new note.', chip: 'Click New Recording · in 2 words', chipBg: '#4F46E5', chipFg: '#FFFFFF', frame: '#F04438' },
+      { key: 'clicking', label: 'Clicking', status: 'REC 00:42 · SCENE 2 OF 5', line: 'Now let’s create a new note.', chip: 'Clicking New Recording', chipBg: '#4F46E5', chipFg: '#FFFFFF', frame: '#F04438' },
+      { key: 'puzzled', label: 'Puzzled', status: 'PAUSED 00:51 · NOTHING IS LOST', line: 'I couldn’t find “Save”. Is it “Save note”?', chip: 'Choose what to do', chipBg: '#F59E0B', chipFg: '#1C1303', frame: '#F59E0B' },
+      { key: 'relieved', label: 'Relieved', status: 'REC 00:52 · SCENE 2 OF 5', line: 'Using “Save note”. Carrying on.', chip: 'Approved by you', chipBg: '#34D399', chipFg: '#06281C', frame: '#F04438' },
+      { key: 'celebrating', label: 'Scene kept', status: 'SCENE 2 DONE · 0:58', line: 'Up next: let’s ask Lumina to summarise the meeting.', chip: 'Keep & next · 4s', chipBg: '#34D399', chipFg: '#06281C', frame: '#34D399' },
+      { key: 'sleeping', label: 'Dozing', status: 'PAUSED 2 MIN', line: 'Waiting for you. Start speaking to pick up again.', chip: 'Resume', chipBg: '#33363D', chipFg: '#F2EFE8', frame: '#4C4F57' }
+    ];
+    const mood = (this.state && this.state.mood) || this.props.mood || 'aiming';
+    const index = Math.max(0, steps.findIndex((s) => s.key === mood));
+    const cur = steps[index];
+    return {
+      mood: cur.key,
+      cur,
+      frame: cur.frame,
+      next: () => this.setState({ mood: steps[(index + 1) % steps.length].key }),
+      moods: steps.map((s) => ({
+        label: s.label,
+        pressed: s.key === cur.key ? 'true' : 'false',
+        bg: s.key === cur.key ? '#4F46E5' : '#17191D',
+        border: s.key === cur.key ? '#818CF8' : '#2A2D33',
+        pick: () => this.setState({ mood: s.key })
+      }))
+    };
+  }
+}
+</script>
+</body>
+</html>

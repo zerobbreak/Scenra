@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Meet Cue</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,600&amp;family=Plus+Jakarta+Sans:wght@500;600;700;800&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0E1013}
+</style>
+</helmet>
+<div style="width: 1280px; height: 800px; box-sizing: border-box; padding: 36px 40px; background: #0E1013; color: #F2EFE8; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; display: flex; flex-direction: column; gap: 24px">
+
+<header style="display: flex; align-items: flex-end; gap: 40px">
+<div style="flex: 1; display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 12px; font-weight: 700; letter-spacing: 0.08em; color: #8D8F96">SCENRA MASCOT</span>
+<h1 style="margin: 0; font-family: 'Literata', Georgia, serif; font-size: 40px; font-weight: 600; letter-spacing: -0.01em">Meet Cue</h1>
+<p style="margin: 0; max-width: 560px; font-size: 15px; line-height: 1.5; color: #B5B3AD">A little prompter with a cursor for an antenna. Cue lives in the pill, reads along with you and shows what Scenra is about to do, so you can glance without reading.</p>
+</div>
+<ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 13px; color: #C9C7C1">
+<li style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #F04438"></span>Red tally light = OBS is recording</li>
+<li style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #818CF8"></span>Never appears in the video</li>
+<li style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #8D8F96"></span>Motions under 400 ms, still with Reduce motion</li>
+<li style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #8D8F96"></span>Can be switched off in Settings</li>
+</ul>
+</header>
+
+<div style="flex: 1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 16px">
+
+<article style="padding: 16px; border-radius: 20px; background: #17191D; border: 1px solid #2A2D33; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center">
+<dc-import name="Cue" mood="ready" size="120" hint-size="120px,120px"></dc-import>
+<h2 style="margin: 0; font-size: 15px; font-weight: 800">Ready</h2>
+<p style="margin: 0; font-size: 12px; line-height: 1.45; color: #B5B3AD">During the countdown. Bobs gently, smiling.</p>
+</article>
+
+<article style="padding: 16px; border-radius: 20px; background: #17191D; border: 1px solid #2A2D33; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center">
+<dc-import name="Cue" mood="reading" size="120" hint-size="120px,120px"></dc-import>
+<h2 style="margin: 0; font-size: 15px; font-weight: 800">Reading along</h2>
+<p style="margin: 0; font-size: 12px; line-height: 1.45; color: #B5B3AD">While you speak. Eyes track your line, mouth moves with your voice.</p>
+</article>
+
+<article style="padding: 16px; border-radius: 20px; background: #17191D; border: 1px solid #2A2D33; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center">
+<dc-import name="Cue" mood="aiming" size="120" hint-size="120px,120px"></dc-import>
+<h2 style="margin: 0; font-size: 15px; font-weight: 800">About to act</h2>
+<p style="margin: 0; font-size: 12px; line-height: 1.45; color: #B5B3AD">An action is a few words away. Leans in, points, cursor glows.</p>
+</article>
+
+<article style="padding: 16px; border-radius: 20px; background: #17191D; border: 1px solid #2A2D33; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center">
+<dc-import name="Cue" mood="clicking" size="120" hint-size="120px,120px"></dc-import>
+<h2 style="margin: 0; font-size: 15px; font-weight: 800">Clicking</h2>
+<p style="margin: 0; font-size: 12px; line-height: 1.45; color: #B5B3AD">On the trigger word. A quick squash and a ripple from the cursor.</p>
+</article>
+
+<article style="padding: 16px; border-radius: 20px; background: #1F1A10; border: 1px solid #5C4410; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center">
+<dc-import name="Cue" mood="puzzled" size="120" hint-size="120px,120px"></dc-import>
+<h2 style="margin: 0; font-size: 15px; font-weight: 800; color: #FDE68A">Puzzled</h2>
+<p style="margin: 0; font-size: 12px; line-height: 1.45; color: #D6C08A">Target not found. Turns amber, scratches its head and waits for you.</p>
+</article>
+
+<article style="padding: 16px; border-radius: 20px; background: #17191D; border: 1px solid #2A2D33; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center">
+<dc-import name="Cue" mood="relieved" size="120" hint-size="120px,120px"></dc-import>
+<h2 style="margin: 0; font-size: 15px; font-weight: 800">Relieved</h2>
+<p style="margin: 0; font-size: 12px; line-height: 1.45; color: #B5B3AD">You approved a fix. A check pops, then back to reading.</p>
+</article>
+
+<article style="padding: 16px; border-radius: 20px; background: #10261E; border: 1px solid #1F4A3A; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center">
+<dc-import name="Cue" mood="celebrating" size="120" hint-size="120px,120px"></dc-import>
+<h2 style="margin: 0; font-size: 15px; font-weight: 800; color: #A7F3D0">Celebrating</h2>
+<p style="margin: 0; font-size: 12px; line-height: 1.45; color: #9FD8C0">Scene kept. One hop and a few sparkles, then settles.</p>
+</article>
+
+<article style="padding: 16px; border-radius: 20px; background: #17191D; border: 1px solid #2A2D33; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center">
+<dc-import name="Cue" mood="sleeping" size="120" hint-size="120px,120px"></dc-import>
+<h2 style="margin: 0; font-size: 15px; font-weight: 800">Dozing</h2>
+<p style="margin: 0; font-size: 12px; line-height: 1.45; color: #B5B3AD">Paused for a while. Wakes up on your first word.</p>
+</article>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
