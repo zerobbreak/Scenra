@@ -10,3 +10,6 @@ target/
 
 # Phase 0 test recordings are evidence, but too big for git
 recordings/
+
+# Local working notes, not shared
+context/PROGRESS-TRACKER.md
