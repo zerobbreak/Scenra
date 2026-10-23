@@ -42,4 +42,6 @@ export type MatrixRow = {
 };
 
 /** Runs the step 1 matrix for the current display scaling. Needs OBS and the demo target. */
-export const runCaptureMatrix = () => invoke<MatrixRow[]>("run_capture_matrix");
+export const runCaptureMatrix = (monitorIndex?: number) => invoke<MatrixRow[]>("run_capture_matrix", { monitorIndex: monitorIndex ?? null });
+
+export const resizeTeleprompter = (expanded: boolean) => invoke<void>("resize_teleprompter", { expanded });

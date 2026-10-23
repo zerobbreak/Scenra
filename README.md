@@ -3,7 +3,7 @@
 *From script to scene.* A recording director for software demos: teach it a workflow once, and it
 replays the workflow with a real, natural cursor while you narrate and OBS records each scene.
 
-Status: **Phase 0, technical prototype**. See [`context/PROJECT_OUTLINE.md`](context/PROJECT_OUTLINE.md)
+Status: **Phase 0 complete; Phase 1 MVP in progress**. See [`context/PROJECT_OUTLINE.md`](context/PROJECT_OUTLINE.md)
 for the architecture and exit criteria.
 
 ## Layout

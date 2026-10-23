@@ -125,3 +125,75 @@ pub fn wait_until_settled(port: u16, timeout: Duration) -> Result<(), String> {
         std::thread::sleep(POLL);
     }
 }
+
+/// Local-only starting state. URLs never enter the AI outline or error messages.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct InitialState {
+    pub url: String,
+    pub headings: Vec<String>,
+    pub dialogs: Vec<String>,
+}
+
+pub fn initial_state(session: &mut Session) -> Result<InitialState, String> {
+    serde_json::from_value(session.evaluate(r#"(() => {
+      const visible = e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
+      const clean = e => (e.innerText || e.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().slice(0,120);
+      return { url: location.href,
+        headings: [...document.querySelectorAll('h1,h2,h3')].filter(visible).map(clean),
+        dialogs: [...document.querySelectorAll('dialog[open],[role=dialog],[aria-modal=true]')].filter(visible).map(clean) };
+    })()"#)?).map_err(|e| e.to_string())
+}
+
+pub fn check_initial(expected: &InitialState, actual: &InitialState) -> Result<(), String> {
+    if actual.url != expected.url {
+        return Err("The page has navigated away from the script starting page.".into());
+    }
+    if actual.dialogs != expected.dialogs {
+        return Err("The open dialogs differ from the script starting page. Close or restore the dialog.".into());
+    }
+    if actual.headings != expected.headings {
+        return Err("The page headings differ from the script starting page.".into());
+    }
+    Ok(())
+}
+
+/// Check the first action without moving the pointer or changing scroll position.
+pub fn check_control(session: &mut Session, label: &str) -> Result<(), String> {
+    let expression = format!(r#"(() => {{
+      const clean = s => (s || '').replace(/\s+/g,' ').trim().toLowerCase();
+      const label = clean({});
+      const matches = [...document.querySelectorAll('a[href],button,[role=button]')]
+        .filter(e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden'
+          && clean(e.innerText || e.getAttribute('aria-label')) === label);
+      if (matches.length !== 1) return false;
+      const e = matches[0], r = e.getBoundingClientRect();
+      if (e.disabled || e.getAttribute('aria-disabled') === 'true') return false;
+      const x = r.left+r.width/2, y = r.top+r.height/2;
+      if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return false;
+      const hit = document.elementFromPoint(x,y);
+      return !!hit && (hit === e || e.contains(hit));
+    }})()"#, serde_json::to_string(label).map_err(|e| e.to_string())?);
+    if session.evaluate(&expression)?.as_bool() != Some(true) {
+        return Err(format!("'{label}' must be visible, enabled and uncovered. Set up the page and retry."));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod initial_tests {
+    use super::*;
+    fn baseline() -> InitialState {
+        InitialState { url: "http://localhost/demo".into(), headings: vec!["Dashboard".into()], dialogs: vec![] }
+    }
+    #[test]
+    fn rejects_navigation_dialog_and_heading_changes() {
+        let expected = baseline();
+        assert!(check_initial(&expected, &baseline()).is_ok());
+        let mut actual = baseline(); actual.url.push_str("/other");
+        assert!(check_initial(&expected, &actual).is_err());
+        let mut actual = baseline(); actual.dialogs.push("Settings".into());
+        assert!(check_initial(&expected, &actual).is_err());
+        let mut actual = baseline(); actual.headings.clear();
+        assert!(check_initial(&expected, &actual).is_err());
+    }
+}

@@ -65,3 +65,16 @@ pub fn set_overlay_zoom(app: AppHandle, zoom: f64) -> Result<DisplayInfo, String
     capture::refit(&app)?;
     display_info(app)
 }
+
+/// Match Windows' monitor interface ID to OBS's monitor_id (resolution alone is ambiguous).
+pub(crate) fn monitor_capture_id(name: &str) -> Result<String, String> {
+    use windows::Win32::Graphics::Gdi::{EnumDisplayDevicesW, DISPLAY_DEVICEW};
+    use windows::core::PCWSTR;
+    let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+    let mut device = DISPLAY_DEVICEW { cb: size_of::<DISPLAY_DEVICEW>() as u32, ..Default::default() };
+    if !unsafe { EnumDisplayDevicesW(PCWSTR(name.as_ptr()), 0, &mut device, 1) }.as_bool() {
+        return Err("Could not identify the monitor for OBS capture".into());
+    }
+    let len = device.DeviceID.iter().position(|c| *c == 0).unwrap_or(device.DeviceID.len());
+    Ok(String::from_utf16_lossy(&device.DeviceID[..len]))
+}

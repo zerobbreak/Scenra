@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { TakeResult, startTake, stopTake } from "./engine";
-import { Action, Scenario, Session, approachAction, pressAction, words } from "./script";
+import { TakeResult, startTake, stopTake, takePreflight } from "./engine";
+import { Action, Scenario, Session, approachAction, pressAction, checkSceneStart, resetScenePage, approveSceneStart, playbackGuard, playbackStatus, words } from "./script";
 
 // Reads the script word by word at a speaking pace and fires each action as narration reaches
 // its trigger word. Until the narration state machine listens to the mic (PROJECT_OUTLINE §4),
@@ -45,6 +45,12 @@ export function useReader(script: Scenario | null, session: Session | null, paus
   const [actions, setActions] = useState<Record<string, ActionState>>({});
   const [lastError, setLastError] = useState<string | null>(null);
   const [takes, setTakes] = useState<SceneTake[]>([]);
+  const [halted, setHalted] = useState(false);
+  const generation = useRef(0);
+  const guardReady = useRef<Promise<void>>(Promise.resolve());
+  const starting = useRef(false);
+  const [needsSetup, setNeedsSetup] = useState(false);
+  const [memoryWarning, setMemoryWarning] = useState<string | null>(null);
   const fired = useRef(new Set<string>());
   /// Takes started per scene, failed ones included, so a retake never reuses a folder.
   const attempts = useRef<Record<number, number>>({});
@@ -61,13 +67,36 @@ export function useReader(script: Scenario | null, session: Session | null, paus
     setActions({});
     setLastError(null);
     setTakes([]);
+    setMemoryWarning(null);
+    setHalted(false);
+    setNeedsSetup(false);
     fired.current.clear();
     approached.current.clear();
     attempts.current = {};
   }, [script, session, record]);
 
   const finished = !script || pos.scene >= script.scenes.length;
-  const reading = phase === "reading" && !finished;
+  const reading = phase === "reading" && !finished && !halted;
+
+  useEffect(() => {
+    const active = reading && !paused && countdown <= 1;
+    generation.current++;
+    guardReady.current = playbackGuard(active);
+    guardReady.current.catch((e) => { setHalted(true); setLastError(`Input guard unavailable: ${e}`); });
+    if (!active) return;
+    let cancelled = false;
+    const id = setInterval(async () => {
+      try {
+        const status = await playbackStatus();
+        if (cancelled) return;
+        if (status.stopped || status.interference) {
+          setHalted(true);
+          setLastError("Playback interrupted by mouse or keyboard input. Retry this scene.");
+        }
+      } catch (e) { if (!cancelled) { setHalted(true); setLastError(`Input guard failed: ${e}`); } }
+    }, 100);
+    return () => { cancelled = true; clearInterval(id); void playbackGuard(false); };
+  }, [reading, paused, countdown > 1]);
   const next = nextAction(script, pos, fired.current);
 
   useEffect(() => {
@@ -81,29 +110,40 @@ export function useReader(script: Scenario | null, session: Session | null, paus
     const spoken = lineWords[pos.word - 1] ?? "";
     const delay = 60000 / SPEEDS[speed] + pauseAfter(spoken) + (pos.word === 0 ? 400 : 0);
     const sceneDone = pos.line === lines.length - 1 && pos.word >= lineWords.length;
-    const id = setTimeout(() => (record && sceneDone ? endScene(pos.scene) : setPos((p) => advance(script, p))), delay);
+    const due = performance.now() + delay;
+    const id = setTimeout(() => {
+      if (performance.now() - due > 1000) {
+        setHalted(true); setLastError("Playback stalled. Retry the scene to keep clicks on their cues."); return;
+      }
+      if (record && sceneDone) void endScene(pos.scene); else setPos((p) => advance(script, p));
+    }, delay);
     return () => clearTimeout(id);
   }, [script, pos, reading, paused, speed, countdown, record]);
 
   // Start gliding towards the next action once it's within the lead time.
   const leadWords = Math.ceil(LEAD_MS / (60000 / SPEEDS[speed]));
   useEffect(() => {
-    if (!reading || countdown > 1 || !next || next.wordsAway >= leadWords) return;
+    if (paused || !reading || countdown > 1 || !next || next.wordsAway >= leadWords) return;
     approach(key(next.scene, next.line, next.index), next.action);
-  }, [reading, countdown, next?.scene, next?.line, next?.index, next?.wordsAway, leadWords]);
+  }, [paused, reading, countdown, next?.scene, next?.line, next?.index, next?.wordsAway, leadWords]);
 
   // Press as the trigger word starts (the chip's "now"): the press re-locates and holds the
   // button for a few hundred ms, so the click lands while the word is being said.
   useEffect(() => {
-    if (!script || !reading || countdown > 0) return;
+    if (paused || !script || !reading || countdown > 0) return;
     script.scenes[pos.scene].lines[pos.line].actions.forEach((action, i) => {
       const k = key(pos.scene, pos.line, i);
       if (action.word <= pos.word && !fired.current.has(k)) fire(k, action);
     });
-  }, [script, pos, reading, countdown]);
+  }, [script, pos, reading, countdown, paused]);
 
   function enqueue(job: () => Promise<void>) {
-    const run = queue.current.then(job);
+    const epoch = generation.current;
+    const run = queue.current.then(async () => {
+      await guardReady.current;
+      if (generation.current !== epoch) throw new Error("Playback was paused or restarted");
+      await job();
+    });
     queue.current = run.catch(() => {});
     return run;
   }
@@ -120,13 +160,17 @@ export function useReader(script: Scenario | null, session: Session | null, paus
 
   function fire(k: string, action: Action) {
     fired.current.add(k);
+    const cue = performance.now();
+    const expiresAt = Date.now() + 500;
     const ready = approach(k, action);
     enqueue(async () => {
       await ready;
-      await pressAction(action.target);
+      if (performance.now() - cue > 500) throw new Error("Action missed its cue. Retry the scene.");
+      await pressAction(action.target, expiresAt);
     })
       .then(() => setActions((a) => ({ ...a, [k]: "done" })))
       .catch((e) => {
+        setHalted(true);
         setActions((a) => ({ ...a, [k]: "failed" }));
         setLastError(`Couldn’t run ${action.label}: ${e}`);
       });
@@ -139,21 +183,35 @@ export function useReader(script: Scenario | null, session: Session | null, paus
   }
 
   /// Record mode: starts the scene's take (preflight, then OBS), then the countdown.
-  async function startScene(scene = pos.scene) {
-    if (!session || !script || scene >= script.scenes.length) return;
+  async function startScene(scene = pos.scene, allowLowMemory = false) {
+    if (!session || !script || scene >= script.scenes.length || starting.current) return;
+    starting.current = true;
+    setHalted(false);
     setPhase("starting");
+    setPos({ scene, line: 0, word: 0 });
     setLastError(null);
     forgetScene(scene);
-    const attempt = (attempts.current[scene] ?? 0) + 1;
-    attempts.current[scene] = attempt;
+    let checked = false;
     try {
+      await checkSceneStart(scene);
+      checked = true;
+      setNeedsSetup(false);
+      const preflight = await takePreflight();
+      setMemoryWarning(preflight.warning);
+      if (preflight.warning && !allowLowMemory) { setPhase("ready"); return; }
+      setMemoryWarning(null);
+      const attempt = (attempts.current[scene] ?? 0) + 1;
+      attempts.current[scene] = attempt;
       await startTake(`${session.id}/scene-${pad(scene + 1)}-take-${attempt}`);
       setPos({ scene, line: 0, word: 0 });
       setCountdown(COUNTDOWN);
       setPhase("reading");
     } catch (e) {
       setLastError(`Couldn’t start recording: ${e}`);
+      setNeedsSetup(!checked);
       setPhase("ready");
+    } finally {
+      starting.current = false;
     }
   }
 
@@ -176,28 +234,46 @@ export function useReader(script: Scenario | null, session: Session | null, paus
 
   /// "Do it now": jump narration to just past the next action and run it.
   function doNext() {
-    if (!next) return;
+    if (!next || paused || halted) return;
     setCountdown(0);
     setPos({ scene: next.scene, line: next.line, word: next.action.word + 1 });
   }
 
   async function restartScene() {
-    if (!script || finished) return;
+    if (!script) return;
+    const scene = Math.min(pos.scene, script.scenes.length - 1);
+    if (scene < 0) return;
+    if (record && (finished || phase === "ready")) { await startScene(scene); return; }
+    setHalted(false);
     if (!record) {
-      forgetScene(pos.scene);
-      setPos({ scene: pos.scene, line: 0, word: 0 });
+      forgetScene(scene);
+      setPos({ scene, line: 0, word: 0 });
+      setCountdown(COUNTDOWN);
       return;
     }
     // Recording: the attempt so far stays on disk as its own take; the scene starts a new one.
     if (phase !== "reading") return;
     setPhase("saving");
     await queue.current;
-    const take = await stopTake(true).catch(() => null);
-    if (take) setTakes((t) => [...t, { scene: pos.scene, attempt: attempts.current[pos.scene], take }]);
+    let take: TakeResult;
+    try { take = await stopTake(true); }
+    catch (e) { setLastError(`Could not stop the take: ${e}. Use Stop to try again.`); setPhase("ready"); return; }
+    setTakes((t) => [...t, { scene: pos.scene, attempt: attempts.current[pos.scene], take }]);
     await startScene(pos.scene);
   }
 
   return {
+    halted,
+    memoryWarning,
+    needsSetup,
+    setupPage: async (approve = false) => {
+      if (starting.current) return;
+      starting.current = true;
+      setPhase("starting");
+      try { if (approve) await approveSceneStart(pos.scene); else await resetScenePage(pos.scene); await checkSceneStart(pos.scene); setNeedsSetup(false); setLastError(null); }
+      catch (e) { setLastError(`Set up the page manually and retry: ${e}`); }
+      finally { starting.current = false; setPhase("ready"); }
+    },
     pos,
     phase,
     record,
@@ -210,7 +286,7 @@ export function useReader(script: Scenario | null, session: Session | null, paus
     doNext,
     restartScene,
     /// Records `scene` (default: the current one). After it, reading carries on from the scene after it.
-    startScene: (scene?: number) => startScene(scene),
+    startScene: (scene?: number, allowLowMemory = false) => startScene(scene, allowLowMemory),
   };
 }
 

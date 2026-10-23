@@ -17,7 +17,7 @@ export const aiStatus = () => invoke<AiStatus>("ai_status");
 export const draftScript = (brief: string) => invoke<Scenario>("draft_script", { brief });
 export const currentScript = () => invoke<Scenario | null>("current_script");
 export const approachAction = (target: string) => invoke<void>("approach_action", { target });
-export const pressAction = (target: string) => invoke<void>("press_action", { target });
+export const pressAction = (target: string, expiresAt: number) => invoke<void>("press_action", { target, expiresAt });
 export const onScriptChanged = (handler: (s: Scenario) => void) =>
   listen<Scenario>("script-changed", (e) => handler(e.payload));
 
@@ -31,3 +31,10 @@ export const onSessionChanged = (handler: (s: Session) => void) =>
   listen<Session>("session-changed", (e) => handler(e.payload));
 
 export const words = (line: Line) => line.text.split(/\s+/).filter(Boolean);
+
+export const checkSceneStart = (scene: number) => invoke<void>("check_scene_start", { scene });
+export const resetScenePage = (scene: number) => invoke<void>("reset_scene_page", { scene });
+export const approveSceneStart = (scene: number) => invoke<void>("approve_scene_start", { scene });
+
+export const playbackGuard = (active: boolean) => invoke<void>("playback_guard", { active });
+export const playbackStatus = () => invoke<{foreign: number; stopped: boolean; interference: boolean}>("guard_status");

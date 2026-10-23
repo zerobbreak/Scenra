@@ -31,7 +31,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 static STOPPED: AtomicBool = AtomicBool::new(false);
-static ARMED: AtomicBool = AtomicBool::new(false);
+static ARMED: AtomicU64 = AtomicU64::new(0);
+static PLAYBACK: AtomicBool = AtomicBool::new(false);
 static FOREIGN: AtomicBool = AtomicBool::new(false);
 static EXPECTED_EVENTS: AtomicU64 = AtomicU64::new(0);
 static FOREIGN_EVENTS: AtomicU64 = AtomicU64::new(0);
@@ -156,7 +157,7 @@ unsafe extern "system" fn stop_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
 fn classify(extra: usize) {
     if extra == TAG {
         EXPECTED_EVENTS.fetch_add(1, Ordering::Relaxed);
-    } else if ARMED.load(Ordering::Relaxed) {
+    } else if ARMED.load(Ordering::Relaxed) > 0 || PLAYBACK.load(Ordering::Relaxed) {
         FOREIGN_EVENTS.fetch_add(1, Ordering::Relaxed);
         FOREIGN.store(true, Ordering::SeqCst);
     }
@@ -212,14 +213,15 @@ pub fn foreign_seen() -> bool {
 pub struct Armed(());
 
 pub fn arm() -> Armed {
-    FOREIGN.store(false, Ordering::SeqCst);
-    ARMED.store(true, Ordering::SeqCst);
+    if ARMED.fetch_add(1, Ordering::SeqCst) == 0 && !PLAYBACK.load(Ordering::SeqCst) {
+        FOREIGN.store(false, Ordering::SeqCst);
+    }
     Armed(())
 }
 
 impl Drop for Armed {
     fn drop(&mut self) {
-        ARMED.store(false, Ordering::SeqCst);
+        ARMED.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -230,6 +232,7 @@ pub struct GuardCounts {
     pub foreign: u64,
     pub key_events: u64,
     pub stopped: bool,
+    pub interference: bool,
 }
 
 pub fn counts() -> GuardCounts {
@@ -238,5 +241,43 @@ pub fn counts() -> GuardCounts {
         foreign: FOREIGN_EVENTS.load(Ordering::Relaxed),
         key_events: KEY_EVENTS.load(Ordering::Relaxed),
         stopped: stopped(),
+        interference: foreign_seen(),
+    }
+}
+
+/// Guard the quiet intervals between scripted actions as well as each input operation.
+#[tauri::command]
+pub fn playback_guard(active: bool) {
+    if active && !PLAYBACK.load(Ordering::SeqCst) {
+        FOREIGN.store(false, Ordering::SeqCst);
+    }
+    PLAYBACK.store(active, Ordering::SeqCst);
+}
+
+pub fn playback_active() -> bool { PLAYBACK.load(Ordering::SeqCst) }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn playback_guard_keeps_interference_latched_across_nested_actions() {
+        playback_guard(true);
+        let outer = arm();
+        classify(TAG);
+        assert!(!foreign_seen());
+        classify(0);
+        assert!(foreign_seen());
+        { let _inner = arm(); assert!(foreign_seen()); }
+        drop(outer);
+        // Playback still guards the quiet interval after an action finishes.
+        assert!(PLAYBACK.load(Ordering::SeqCst));
+        assert!(foreign_seen());
+        playback_guard(false);
+        playback_guard(true);
+        assert!(!foreign_seen());
+        classify(0);
+        assert!(foreign_seen());
+        playback_guard(false);
+        FOREIGN.store(false, Ordering::SeqCst);
     }
 }

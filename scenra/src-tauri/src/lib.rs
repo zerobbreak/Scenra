@@ -37,10 +37,12 @@ pub fn run() {
         })
         .manage(target::LaunchedTarget::default())
         .manage(script::CurrentScript::default())
+        .manage(script::ScriptInitialState::default())
         .manage(script::CurrentSession::default())
         .manage(take::CurrentTake::default())
         .invoke_handler(tauri::generate_handler![
             capture::open_teleprompter,
+            capture::resize_teleprompter,
             capture::close_teleprompter,
             capture::set_capture_excluded,
             capture::capture_status,
@@ -55,6 +57,9 @@ pub fn run() {
             script::ai_status,
             script::draft_script,
             script::current_script,
+            script::check_scene_start,
+            script::reset_scene_page,
+            script::approve_scene_start,
             script::start_session,
             script::current_session,
             script::approach_action,
@@ -66,9 +71,11 @@ pub fn run() {
             engine::slow_type_test,
             engine::simulate_hang,
             engine::guard_status,
+            hooks::playback_guard,
             engine::clear_stop,
             engine::guard_key,
             take::obs_status,
+            take::take_preflight,
             take::start_take,
             take::stop_take,
             take::restore_obs_profile,

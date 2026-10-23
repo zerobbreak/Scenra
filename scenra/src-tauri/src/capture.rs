@@ -175,7 +175,7 @@ fn fit(app: &AppHandle, window: &WebviewWindow, label: &str) -> Result<(), Strin
     let origin = area.position.to_logical::<f64>(scale);
     let area = area.size.to_logical::<f64>(scale);
     let wanted = settings::load(app).overlay_zoom.clamp(settings::MIN_ZOOM, settings::MAX_ZOOM);
-    let zoom = wanted.min((area.width - 2.0 * SIDE_GAP) / PILL_SIZE.0).max(0.5);
+    let zoom = fitted_zoom(wanted, area.width, area.height, size);
     let (w, h) = (size.0 * zoom, size.1 * zoom);
     window.set_size(LogicalSize::new(w, h)).map_err(err)?;
     window.set_zoom(zoom).map_err(err)?;
@@ -312,5 +312,42 @@ fn grab_screen(x: i32, y: i32, w: i32, h: i32) -> Result<Vec<u8>, String> {
             return Err("GetDIBits failed".into());
         }
         Ok(pixels)
+    }
+}
+
+/// Reuse the same fitting rules when the reader opens/closes peek; preserve a dragged position.
+#[tauri::command]
+pub fn resize_teleprompter(app: AppHandle, expanded: bool) -> Result<(), String> {
+    let Some(window) = app.get_webview_window(TELEPROMPTER) else { return Ok(()) };
+    let Some(monitor) = window.current_monitor().map_err(err)?.or(app.primary_monitor().map_err(err)?) else { return Ok(()) };
+    let scale = monitor.scale_factor();
+    let area = monitor.work_area();
+    let size = (PILL_SIZE.0, if expanded { 318.0 } else { PILL_SIZE.1 });
+    let wanted = settings::load(&app).overlay_zoom.clamp(settings::MIN_ZOOM, settings::MAX_ZOOM);
+    let zoom = fitted_zoom(wanted, f64::from(area.size.width) / scale, f64::from(area.size.height) / scale, size);
+    window.set_zoom(zoom).map_err(err)?;
+    window.set_size(LogicalSize::new(size.0 * zoom, size.1 * zoom)).map_err(err)?;
+    let pos = window.outer_position().map_err(err)?;
+    let max_x = area.position.x + area.size.width as i32 - (size.0 * zoom * scale).ceil() as i32;
+    let max_y = area.position.y + area.size.height as i32 - (size.1 * zoom * scale).ceil() as i32;
+    window.set_position(tauri::PhysicalPosition::new(
+        pos.x.clamp(area.position.x, max_x.max(area.position.x)),
+        pos.y.clamp(area.position.y, max_y.max(area.position.y)),
+    )).map_err(err)
+}
+
+fn fitted_zoom(wanted: f64, width: f64, height: f64, size: (f64, f64)) -> f64 {
+    wanted.min((width - 2.0 * SIDE_GAP).max(1.0) / size.0).min(height.max(1.0) / size.1)
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+    #[test]
+    fn phase_resize_preserves_zoom_and_fits_peek_on_small_displays() {
+        assert_eq!(fitted_zoom(0.75, 1280.0, 680.0, PILL_SIZE), 0.75);
+        assert_eq!(fitted_zoom(0.9, 1280.0, 680.0, (840.0, 318.0)), 0.9);
+        let zoom = fitted_zoom(1.5, 600.0, 300.0, (840.0, 318.0));
+        assert!(840.0 * zoom <= 568.0 && 318.0 * zoom <= 300.0);
     }
 }

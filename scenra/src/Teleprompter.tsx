@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { LogicalSize, getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onPrompter, sendPrompter } from "./prompter";
 import { NextAction, Position, SPEEDS, Speed, useReader } from "./reader";
 import { TakeResult } from "./engine";
+import { resizeTeleprompter } from "./capture";
 import { Line, Scenario, Session, currentScript, currentSession, onScriptChanged, onSessionChanged, words } from "./script";
 
 // Compact pill. One line while recording (design C2, CompactAction.dc.html); the control bar's
@@ -15,8 +16,6 @@ import { Line, Scenario, Session, currentScript, currentSession, onScriptChanged
 const MARKER = "#FF00FF";
 
 // Logical px. The collapsed size must match PILL_SIZE in capture.rs.
-const WIDTH = 840;
-const HEIGHT = { line: 112, peek: 318 };
 
 const UI_FONT = { fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif" };
 const SCRIPT_FONT = { fontFamily: "Literata, Georgia, serif" };
@@ -196,12 +195,30 @@ function ReadyToRecord({ script, reader }: { script: Scenario; reader: Reader })
           {last && ` · scene ${last.scene + 1} saved (${seconds(last.take)})`}
         </p>
         <p style={SCRIPT_FONT} className="m-0 truncate text-xl font-semibold">{script.scenes[pos.scene].title}</p>
-        {(reader.lastError || (last && choppy(last.take))) && (
-          <p className="m-0 truncate text-[11px] font-semibold text-[#FDE68A]">
-            {reader.lastError ?? `Scene ${last!.scene + 1}: ${choppy(last!.take)}`}
+        {(reader.lastError || reader.memoryWarning || (last && choppy(last.take))) && (
+          <p title={reader.lastError ?? reader.memoryWarning ?? (last ? choppy(last.take) ?? undefined : undefined)} className="m-0 truncate text-[11px] font-semibold text-[#FDE68A]">
+            {reader.lastError ?? reader.memoryWarning ?? `Scene ${last!.scene + 1}: ${choppy(last!.take)}`}
           </p>
         )}
       </div>
+      {reader.needsSetup && (
+        <>
+        <button type="button" title="Reload the starting page. Unsaved page changes may be lost."
+          onClick={() => reader.setupPage()}
+          className="flex-none cursor-pointer rounded-full border-none bg-[#33363D] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#40444C]">
+          Reset page
+        </button>
+        <button type="button" title="Save the page you prepared as this scene's starting state."
+          onClick={() => reader.setupPage(true)}
+          className="flex-none cursor-pointer rounded-full border-none bg-[#33363D] px-3 py-2.5 text-xs font-bold text-white hover:bg-[#40444C]">
+          Use current page
+        </button>
+        </>
+      )}
+      {reader.memoryWarning && (
+        <button type="button" onClick={() => reader.startScene()}
+          className="flex-none cursor-pointer rounded-full border-none bg-[#33363D] px-3 py-2.5 text-sm font-bold text-white">Check again</button>
+      )}
       {last && choppy(last.take) && (
         <button
           type="button"
@@ -213,11 +230,11 @@ function ReadyToRecord({ script, reader }: { script: Scenario; reader: Reader })
       )}
       <button
         type="button"
-        onClick={() => reader.startScene()}
+        onClick={() => reader.startScene(undefined, !!reader.memoryWarning)}
         className="flex flex-none cursor-pointer items-center gap-2 rounded-full border-none bg-[#DC2626] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#E23B3B]"
       >
         <span className="size-2.5 rounded-full bg-white" />
-        Record scene {pos.scene + 1}
+        {reader.memoryWarning ? "Record anyway" : `Record scene ${pos.scene + 1}`}
       </button>
     </div>
   );
@@ -229,7 +246,7 @@ function OneLine({ script, reader, elapsed, paused }: { script: Scenario; reader
   return (
     <div className="flex flex-1 flex-col justify-center gap-2.5 py-3 pr-3 pl-[18px]">
       <div className="flex items-center gap-3.5">
-        <Timer elapsed={elapsed} paused={paused} countdown={reader.countdown} rec={reader.record} />
+        <Timer elapsed={elapsed} paused={paused || reader.halted} countdown={reader.countdown} rec={reader.record} />
         <p style={SCRIPT_FONT} className="m-0 min-w-0 flex-1 overflow-hidden py-1 text-xl leading-snug font-semibold whitespace-nowrap">
           <LineWords line={line} spoken={pos.word} scene={pos.scene} lineIndex={pos.line} reader={reader} follow />
         </p>
@@ -237,7 +254,7 @@ function OneLine({ script, reader, elapsed, paused }: { script: Scenario; reader
         <DoItNow reader={reader} />
       </div>
       {reader.lastError ? (
-        <p className="m-0 mr-[54px] truncate text-[11px] font-semibold text-[#FDE68A]">{reader.lastError}</p>
+        <p title={reader.lastError} className="m-0 mr-[54px] truncate text-[11px] font-semibold text-[#FDE68A]">{reader.lastError}</p>
       ) : (
         <SceneProgress script={script} pos={pos} reader={reader} />
       )}
@@ -275,7 +292,7 @@ function Peek({
   return (
     <div className="flex flex-1 flex-col gap-3.5 pt-4 pr-4 pb-3.5 pl-5">
       <div className="flex items-center gap-3">
-        <Timer elapsed={elapsed} paused={paused} countdown={reader.countdown} rec={reader.record} />
+        <Timer elapsed={elapsed} paused={paused || reader.halted} countdown={reader.countdown} rec={reader.record} />
         <span className="truncate text-xs font-bold text-[#C9C7C1]">
           Scene {pos.scene + 1} of {script.scenes.length} · {scene.title}
         </span>
@@ -396,7 +413,7 @@ export default function Teleprompter() {
     if (reader.phase === "starting") setElapsed(0);
   }, [reader.phase]);
 
-  const running = !!script && !reader.finished && reader.phase === "reading" && reader.countdown === 0 && !paused;
+  const running = !!script && !reader.finished && reader.phase === "reading" && reader.countdown === 0 && !paused && !reader.halted;
   useEffect(() => {
     if (!running) return;
     const id = setInterval(() => setElapsed((s) => s + 1), 1000);
@@ -419,7 +436,7 @@ export default function Teleprompter() {
 
   useEffect(() => {
     const tall = peek && script && !reader.finished && reader.phase === "reading";
-    getCurrentWindow().setSize(new LogicalSize(WIDTH, tall ? HEIGHT.peek : HEIGHT.line));
+    resizeTeleprompter(!!tall).catch(console.error);
   }, [peek, script, reader.finished, reader.phase]);
 
   // The window is frameless, so dragging anywhere except a button moves it.
@@ -434,14 +451,26 @@ export default function Teleprompter() {
   else if (!script) body = <Message>No script yet. In Scenra, launch the app and click “Draft script with Gemini”.</Message>;
   else if (reader.finished && reader.record)
     body = (
-      <Message>
-        All {script.scenes.length} scenes recorded · {reader.takes.length} take{reader.takes.length === 1 ? "" : "s"} in recordings/takes/{session?.id}
-      </Message>
+      <div className="flex flex-1 items-center gap-4 px-6">
+        <div className="min-w-0 flex-1">
+          <p className="m-0 text-sm">All {script.scenes.length} scenes recorded - {reader.takes.length} takes</p>
+          {reader.takes.length > 0 && choppy(reader.takes[reader.takes.length - 1].take) && (
+            <p title={choppy(reader.takes[reader.takes.length - 1].take)!} className="m-0 truncate text-xs text-[#FDE68A]">
+              {choppy(reader.takes[reader.takes.length - 1].take)}
+            </p>
+          )}
+          <p className="m-0 truncate text-xs text-[#8D8F96]">recordings/takes/{session?.id}</p>
+        </div>
+        <button type="button" onClick={() => reader.restartScene()}
+          className="flex-none cursor-pointer rounded-full border-none bg-[#33363D] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#40444C]">
+          Retake scene {script.scenes.length}
+        </button>
+      </div>
     );
   else if (reader.finished) body = <Message>That’s the whole script · {format(elapsed)} · press Retry to read the last scene again.</Message>;
   else if (reader.phase === "ready") body = <ReadyToRecord script={script} reader={reader} />;
   else if (reader.phase === "starting")
-    body = <Message>Scene {reader.pos.scene + 1}: waiting for the page to settle, then OBS starts recording…</Message>;
+    body = <Message>Scene {reader.pos.scene + 1}: checking or restoring the starting page…</Message>;
   else if (reader.phase === "saving") body = <Message>Saving scene {reader.pos.scene + 1}…</Message>;
   else if (peek)
     body = (
@@ -458,7 +487,7 @@ export default function Teleprompter() {
         }}
       />
     );
-  else body = <OneLine script={script} reader={reader} elapsed={elapsed} paused={paused} />;
+  else body = <OneLine script={script} reader={reader} elapsed={elapsed} paused={paused || reader.halted} />;
 
   return (
     <section

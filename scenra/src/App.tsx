@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import Button from "./Button";
 import DisplayPanel from "./DisplayPanel";
+import { displayInfo, MonitorInfo } from "./display";
 import EnginePanel from "./EnginePanel";
 import ScriptPanel from "./ScriptPanel";
 import TargetPanel from "./TargetPanel";
@@ -29,6 +30,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [matrix, setMatrix] = useState<MatrixRow[] | null>(null);
   const [matrixRunning, setMatrixRunning] = useState(false);
+  const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
+  const [matrixMonitor, setMatrixMonitor] = useState("");
 
   async function run<T>(action: () => Promise<T>, apply: (value: T) => void) {
     setError(null);
@@ -46,6 +49,7 @@ export default function App() {
 
   useEffect(() => {
     update(captureStatus);
+    displayInfo().then(info => setMonitors(info.monitors)).catch(e => setError(String(e)));
     // The control bar's Stop button closes the teleprompter from another window.
     const unlisten = listen("teleprompter-closed", () => update(captureStatus));
     return () => {
@@ -81,12 +85,19 @@ export default function App() {
         <Button disabled={!open} onClick={() => update(closeTeleprompter)}>
           Close
         </Button>
+        <label className="flex items-center gap-2 text-sm text-zinc-300">
+          Matrix display
+          <select disabled={matrixRunning} value={matrixMonitor} onChange={e => setMatrixMonitor(e.target.value)} className="rounded-md bg-zinc-900 p-2">
+            <option value="">Current target display</option>
+            {monitors.map((m, i) => <option key={m.name ?? i} value={i}>{m.name ?? `Display ${i + 1}`} - {Math.round(m.scale * 100)}%</option>)}
+          </select>
+        </label>
         <Button
           disabled={matrixRunning}
           onClick={async () => {
             setMatrixRunning(true);
             setMatrix(null);
-            await run(runCaptureMatrix, setMatrix);
+            await run(() => runCaptureMatrix(matrixMonitor === "" ? undefined : Number(matrixMonitor)), setMatrix);
             setMatrixRunning(false);
             update(captureStatus);
           }}

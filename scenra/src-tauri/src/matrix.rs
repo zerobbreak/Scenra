@@ -15,7 +15,7 @@ use crate::input::Pace;
 use crate::locate::{self, Selector};
 use crate::obs::Obs;
 use crate::page;
-use crate::take::{self, CurrentTake};
+use crate::take;
 use crate::target::{self, LaunchedTarget};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -83,29 +83,46 @@ fn err(e: impl std::fmt::Display) -> String {
 }
 
 #[tauri::command(async)]
-pub fn run_capture_matrix(app: AppHandle) -> Result<Vec<RowResult>, String> {
+pub fn run_capture_matrix(app: AppHandle, monitor_index: Option<usize>) -> Result<Vec<RowResult>, String> {
     let mut obs = Obs::connect()?;
-    let capture = display_capture(&mut obs)?;
-    let source = capture.name.clone();
-    let original = obs.request("GetInputSettings", json!({ "inputName": source }))?["inputSettings"]["method"].clone();
-
-    let mut results = Vec::new();
-    let outcome = ROWS.iter().try_for_each(|row| {
-        results.push(run_row(&app, &mut obs, &capture, row)?);
-        Ok::<_, String>(())
-    });
-
-    // Leave things as they were, even after a failed row.
+    if obs.request("GetRecordStatus", json!({}))?["outputActive"] == true {
+        return Err("Stop the current recording before running display validation".into());
+    }
+    let source = display_capture(&mut obs)?.name;
+    let original = obs.request("GetInputSettings", json!({ "inputName": source }))?["inputSettings"].clone();
+    let outcome = (|| -> Result<Vec<RowResult>, String> {
+        let _placement = if let Some(index) = monitor_index {
+            let monitors = app.available_monitors().map_err(err)?;
+            let monitor = monitors.get(index).ok_or("Selected monitor is no longer available")?;
+            let name = monitor.name().ok_or("The selected monitor has no Windows device name")?;
+            let id = crate::display::monitor_capture_id(name)?;
+            let (pid, _) = target::running(&app.state::<LaunchedTarget>())?;
+            let area = monitor.work_area();
+            let placement = locate::place_on_monitor(pid, (area.position.x, area.position.y, area.size.width, area.size.height))?;
+            obs.request("SetInputSettings", json!({ "inputName": source, "inputSettings": { "monitor_id": id } }))?;
+            std::thread::sleep(METHOD_SETTLE);
+            Some(placement)
+        } else { None };
+        let capture = display_capture(&mut obs)?;
+        let mut results = Vec::new();
+        for row in &ROWS { results.push(run_row(&app, &mut obs, &capture, row)?); }
+        Ok(results)
+    })();
+    // Restore the exact input settings and target placement even after a failed row.
     let _ = capture::close_teleprompter(app.clone());
-    let take: State<'_, CurrentTake> = app.state();
-    let _ = take::stop_take(take, None);
-    let _ = obs.request("SetInputSettings", json!({ "inputName": source, "inputSettings": { "method": original } }));
-    outcome.map(|()| results)
+    let _ = take::stop_take(app.state(), None);
+    let restored = obs.request("SetInputSettings", json!({ "inputName": source, "inputSettings": original, "overlay": false }));
+    match (outcome, restored) {
+        (Ok(results), Ok(_)) => Ok(results),
+        (Err(e), Ok(_)) => Err(e),
+        (result, Err(e)) => Err(format!("{}; could not restore OBS Display Capture: {e}", result.err().unwrap_or_default())),
+    }
 }
 
 /// The Display Capture source in the program scene, and where it sits on the OBS canvas.
 struct DisplayCapture {
     name: String,
+    monitor_id: String,
     /// Canvas px of the captured monitor's top-left corner (after crop).
     position: (f64, f64),
     scale: (f64, f64),
@@ -146,7 +163,9 @@ fn display_capture(obs: &mut Obs) -> Result<DisplayCapture, String> {
              (right-click › Transform › Reset Transform), so Scenra can find the pill in the frame"
         ));
     }
+    let settings = obs.request("GetInputSettings", json!({ "inputName": name }))?;
     Ok(DisplayCapture {
+        monitor_id: settings["inputSettings"]["monitor_id"].as_str().unwrap_or_default().to_owned(),
         name,
         position: (f("positionX"), f("positionY")),
         scale: (f("scaleX"), f("scaleY")),
@@ -166,6 +185,10 @@ fn run_row(app: &AppHandle, obs: &mut Obs, capture: &DisplayCapture, row: &Row) 
     place_over_target(&pill, &targets)?;
     let scale = pill.scale_factor().map_err(err)?;
     let monitor = pill.current_monitor().map_err(err)?.ok_or("the pill isn't on a monitor")?;
+    let id = crate::display::monitor_capture_id(monitor.name().ok_or("Monitor name unavailable")?)?;
+    if !capture.monitor_id.eq_ignore_ascii_case(&id) {
+        return Err("OBS Display Capture is pointed at a different monitor; select the target monitor in the matrix controls".into());
+    }
     let size = monitor.size();
     if (f64::from(size.width), f64::from(size.height)) != capture.source_size {
         return Err(format!(
@@ -245,8 +268,16 @@ fn place_over_target(pill: &tauri::WebviewWindow, targets: &LaunchedTarget) -> R
     let located = locate::locate(&mut page::page_session(port)?, pid, &Selector::TestId("create-recording".into()))?;
     let size = pill.outer_size().map_err(err)?;
     let button = located.screen;
-    let x = (button.x as i32 + button.width as i32 / 2 - size.width as i32 / 3).max(0);
-    let y = (button.y as i32 - size.height as i32 - PILL_GAP).max(0);
+    let (cx, cy) = button.center();
+    let monitor = pill.app_handle().available_monitors().map_err(err)?.into_iter().find(|m| {
+        cx >= f64::from(m.position().x) && cy >= f64::from(m.position().y)
+            && cx < f64::from(m.position().x) + f64::from(m.size().width)
+            && cy < f64::from(m.position().y) + f64::from(m.size().height)
+    }).ok_or("Target control is not on an available monitor")?;
+    let area = monitor.work_area();
+    let x = (button.x as i32 + button.width as i32 / 2 - size.width as i32 / 3)
+        .clamp(area.position.x, (area.position.x + area.size.width as i32 - size.width as i32).max(area.position.x));
+    let y = (button.y as i32 - size.height as i32 - PILL_GAP).max(area.position.y);
     pill.set_position(PhysicalPosition::new(x, y)).map_err(err)
 }
 
@@ -358,7 +389,7 @@ mod tests {
     use super::*;
 
     fn capture(position: (f64, f64), scale: (f64, f64), crop: (f64, f64)) -> DisplayCapture {
-        DisplayCapture { name: "Display Capture".into(), position, scale, crop, source_size: (3840.0, 2160.0) }
+        DisplayCapture { name: "Display Capture".into(), monitor_id: String::new(), position, scale, crop, source_size: (3840.0, 2160.0) }
     }
 
     #[test]

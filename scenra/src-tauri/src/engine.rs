@@ -8,7 +8,7 @@ use crate::locate::{self, Probe, ProbeError, Selector};
 use crate::page;
 use crate::ripple;
 use crate::target::{self, LaunchedTarget};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::State;
 
 fn session(targets: &LaunchedTarget) -> Result<(u32, Session), String> {
@@ -43,6 +43,10 @@ pub fn approach(targets: &LaunchedTarget, selector: &Selector, pace: Pace) -> Re
 /// Clicks the element and flashes the ripple. Re-locates it first (no movement); if the page has
 /// moved it since the approach, or the cursor isn't on it, re-aims at fast pace before clicking.
 pub fn press(targets: &LaunchedTarget, selector: &Selector) -> Result<(), String> {
+    press_before(targets, selector, None)
+}
+
+pub fn press_before(targets: &LaunchedTarget, selector: &Selector, deadline: Option<Instant>) -> Result<(), String> {
     let (pid, mut session) = session(targets)?;
     let located = locate::locate(&mut session, pid, selector)?;
     let (cx, cy) = input::cursor();
@@ -54,6 +58,12 @@ pub fn press(targets: &LaunchedTarget, selector: &Selector) -> Result<(), String
     } else {
         verified(&mut session, pid, selector, Pace::Fast)?.located.screen.center()
     };
+    if deadline.is_some() && (!hooks::playback_active() || hooks::foreign_seen() || hooks::stopped()) {
+        return Err("Playback interrupted; retry the scene.".into());
+    }
+    if deadline.is_some_and(|d| Instant::now() > d) {
+        return Err("The action missed its cue; pause and retry the scene.".into());
+    }
     input::click().map_err(|e| e.to_string())?;
     ripple::show_at(x, y)
 }

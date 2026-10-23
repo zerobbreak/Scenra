@@ -38,3 +38,6 @@ export const startTake = (folder?: string) => invoke<string>("start_take", { fol
 /** `keepProfile` leaves OBS on the Scenra profile for the next scene of a recorded session. */
 export const stopTake = (keepProfile = false) => invoke<TakeResult>("stop_take", { keepProfile });
 export const restoreObsProfile = () => invoke<void>("restore_obs_profile");
+
+export type TakePreflight = { freeMemoryMb: number; warning: string | null };
+export const takePreflight = () => invoke<TakePreflight>("take_preflight");

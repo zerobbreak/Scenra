@@ -446,6 +446,120 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "launches the demo target window"]
+    fn scene_preflight_rejects_overlay_and_recovers_after_reset() {
+        let user_data = std::env::temp_dir().join("scenra-test-scene-start");
+        let (mut child, port) = spawn_demo_target(&user_data).unwrap();
+        let result = (|| -> Result<(), String> {
+            crate::page::wait_until_settled(port, Duration::from_secs(15))?;
+            let mut page = crate::page::page_session(port)?;
+            let baseline = crate::page::initial_state(&mut page)?;
+            let outline = crate::page::outline(&mut page)?;
+            let label = &outline.controls.first().ok_or("fixture has no controls")?.label;
+            crate::page::check_control(&mut page, label)?;
+            page.evaluate(r#"(() => {
+              const d = document.createElement('dialog'); d.id = 'scene-test';
+              d.textContent = 'Settings'; document.body.append(d); d.showModal(); return true;
+            })()"#)?;
+            assert!(crate::page::check_initial(&baseline, &crate::page::initial_state(&mut page)?).is_err());
+            assert!(crate::page::check_control(&mut page, label).is_err());
+            page.evaluate("document.querySelector('#scene-test').remove(); true")?;
+            crate::page::check_initial(&baseline, &crate::page::initial_state(&mut page)?)?;
+            crate::page::check_control(&mut page, label)?;
+            page.call("Page.navigate", serde_json::json!({ "url": baseline.url }))?;
+            crate::page::wait_until_settled(port, Duration::from_secs(15))?;
+            let mut page = crate::page::page_session(port)?;
+            crate::page::check_initial(&baseline, &crate::page::initial_state(&mut page)?)?;
+            crate::page::check_control(&mut page, label)
+        })();
+        let _ = child.kill();
+        let _ = child.wait();
+        result.unwrap();
+    }
+
+    #[test]
+    #[ignore = "launches and minimises the demo target window"]
+    fn locator_restores_minimised_target_before_measuring() {
+        use windows::Win32::UI::WindowsAndMessaging::{IsIconic, ShowWindow, SW_MINIMIZE};
+        use windows::Win32::UI::HiDpi::{SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
+        let previous_dpi = unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+        let user_data = std::env::temp_dir().join("scenra-test-minimised-target");
+        let (mut child, port) = spawn_demo_target(&user_data).unwrap();
+        let result = (|| -> Result<(), String> {
+            crate::page::wait_until_settled(port, Duration::from_secs(15))?;
+            let mut page = crate::page::page_session(port)?;
+            let outline = crate::page::outline(&mut page)?;
+            let selector = crate::locate::Selector::Label(outline.controls.first().ok_or("No controls")?.label.clone());
+            let (top, _, _) = crate::locate::render_widget(child.id())?;
+            unsafe { let _ = ShowWindow(top, SW_MINIMIZE); }
+            assert!(unsafe { IsIconic(top) }.as_bool());
+            let found = crate::locate::locate(&mut page, child.id(), &selector)?;
+            assert!(!unsafe { IsIconic(top) }.as_bool());
+            assert!(found.screen.width > 0.0 && found.screen.height > 0.0);
+            Ok(())
+        })();
+        let _ = child.kill(); let _ = child.wait();
+        unsafe { SetThreadDpiAwarenessContext(previous_dpi); }
+        result.unwrap();
+    }
+
+    /// Local-only Chrome regression: the first click runs after a delayed page paint/settle.
+    #[test]
+    #[ignore = "launches Chrome and moves the real pointer"]
+    fn chrome_preflight_then_first_click() {
+        use std::io::{Read, Write};
+        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+        use windows::Win32::UI::HiDpi::{SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stopping = Arc::new(AtomicBool::new(false));
+        let stopped = stopping.clone();
+        let server = std::thread::spawn(move || {
+            for connection in listener.incoming() {
+                if stopped.load(Ordering::SeqCst) { break; }
+                let Ok(mut stream) = connection else { break };
+                let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
+                let mut request = [0u8; 4096];
+                let Ok(n) = stream.read(&mut request) else { continue };
+                if n == 0 { continue; }
+                let request = String::from_utf8_lossy(&request[..n]);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let (content, kind) = match path {
+                    "/main.js" => (include_str!("../../../fixtures/demo-target/src/main.js"), "text/javascript"),
+                    "/styles.css" => (include_str!("../../../fixtures/demo-target/src/styles.css"), "text/css"),
+                    _ => { std::thread::sleep(Duration::from_millis(700)); (include_str!("../../../fixtures/demo-target/src/index.html"), "text/html") }
+                };
+                let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{content}", content.len());
+            }
+        });
+        let previous_dpi = unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+        let profile = std::env::temp_dir().join(format!("scenra-chrome-preflight-{}", crate::take::stamp()));
+        let spawned = spawn_chrome(&format!("http://{addr}/"), &profile);
+        let result = match spawned {
+            Ok((mut child, port)) => {
+                let result = (|| -> Result<(), String> {
+                    crate::page::wait_until_settled(port, Duration::from_secs(15))?;
+                    let mut page = crate::page::page_session(port)?;
+                    let selector = crate::locate::Selector::TestId("create-recording".into());
+                    let probe = crate::locate::probe(&mut page, child.id(), &selector, crate::input::Pace::Natural).map_err(|e| e.to_string())?;
+                    assert!(probe.passed, "Chrome hover probe missed");
+                    crate::input::click().map_err(|e| e.to_string())?;
+                    std::thread::sleep(Duration::from_millis(250));
+                    assert_eq!(page.evaluate("!document.querySelector('[data-testid=recording-panel]').hidden")?, serde_json::json!(true));
+                    Ok(())
+                })();
+                let _ = child.kill(); let _ = child.wait(); result
+            }
+            Err(e) => Err(e),
+        };
+        unsafe { SetThreadDpiAwarenessContext(previous_dpi); }
+        stopping.store(true, Ordering::SeqCst);
+        let _ = std::net::TcpStream::connect(addr);
+        let _ = server.join();
+        result.unwrap();
+    }
+
+    #[test]
     fn descends_from_walks_parents() {
         let processes = HashMap::from([
             (30, ProcessEntry { parent: 20, exe: "msedgewebview2.exe".into() }),

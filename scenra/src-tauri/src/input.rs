@@ -15,7 +15,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, SetCursorPos,
+    SM_YVIRTUALSCREEN,
 };
 
 /// "SCNR" — marks Scenra's own input events.
@@ -168,8 +168,8 @@ pub fn move_to(x: f64, y: f64, pace: Pace) -> Result<(), Abort> {
             return Err(abort);
         }
     }
-    // Normalised coordinates can land a pixel off; settle exactly.
-    let _ = unsafe { SetCursorPos(x.round() as i32, y.round() as i32) };
+    // Keep the final event tagged too: SetCursorPos looks like foreign input to the guard.
+    move_abs(x, y);
     Ok(())
 }
 

@@ -75,6 +75,26 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TakePreflight {
+    free_memory_mb: u64,
+    warning: Option<String>,
+}
+
+fn memory_preflight(free_memory_mb: u64) -> TakePreflight {
+    let warning = (free_memory_mb < 1024).then(|| format!(
+        "Only {free_memory_mb} MB of RAM is free. Close other apps and check again, or record anyway."
+    ));
+    TakePreflight { free_memory_mb, warning }
+}
+
+/// Advisory only: the presenter decides whether to proceed on a busy machine.
+#[tauri::command]
+pub fn take_preflight() -> TakePreflight {
+    memory_preflight(encoding::free_memory_mb())
+}
+
 #[tauri::command(async)]
 pub fn obs_status() -> Result<ObsStatus, String> {
     let mut obs = Obs::connect()?;
@@ -357,5 +377,15 @@ mod tests {
         for bad in ["", "../x", "a/../b", "/abs", "a//b", r"a", "C:x", "a/"] {
             assert!(!is_safe_folder(bad), "{bad}");
         }
+    }
+}
+
+#[cfg(test)]
+mod preflight_tests {
+    use super::*;
+    #[test]
+    fn warns_below_one_gib_without_blocking_the_recorder() {
+        assert!(memory_preflight(1023).warning.is_some());
+        assert!(memory_preflight(1024).warning.is_none());
     }
 }

@@ -115,9 +115,9 @@ fn find_js(selector: &Selector) -> String {
               const els = [...document.querySelectorAll('a[href],button,[role=button],input,textarea,select')]
                 .filter((e) => e.offsetParent !== null);
               const text = (e) => clean(e.innerText || e.getAttribute('aria-label') || e.placeholder);
-              // Labels can change after a click (a flashcard flips), so fall back to the first word.
-              return els.find((e) => text(e).startsWith(full))
-                || els.find((e) => text(e).split(' ')[0] === full.split(' ')[0]);
+              // A changed or ambiguous label must fail rather than select another control.
+              const matches = els.filter((e) => text(e) === full);
+              return matches.length === 1 ? matches[0] : null;
             }})()"#,
             label = json_str(label)
         ),
@@ -150,6 +150,7 @@ fn json_str(s: &str) -> String {
 
 /// Finds the element and maps it to physical screen px. `pid` is the target's process.
 pub fn locate(session: &mut Session, pid: u32, selector: &Selector) -> Result<Located, String> {
+    restore_target(pid)?;
     let geometry: PageGeometry =
         serde_json::from_value(session.evaluate(&find_js(selector))?).map_err(|e| e.to_string())?;
     let css = geometry.rect.ok_or_else(|| format!("no element {selector} on the page"))?;
@@ -292,7 +293,7 @@ fn covering(x: f64, y: f64, widget: HWND) -> Option<String> {
 
 /// The largest visible `Chrome_RenderWidgetHostHWND` under the target's top-level windows: the
 /// top-level window that holds it, the widget itself, and its screen rect.
-fn render_widget(pid: u32) -> Result<(HWND, HWND, Rect), String> {
+pub(crate) fn render_widget(pid: u32) -> Result<(HWND, HWND, Rect), String> {
     struct Search {
         pids: HashSet<u32>,
         current_top: HWND,
@@ -334,4 +335,48 @@ fn render_widget(pid: u32) -> Result<(HWND, HWND, Rect), String> {
     let mut search = Search { pids: process_tree(pid), current_top: HWND::default(), best: None };
     let _ = unsafe { EnumWindows(Some(top), LPARAM(&mut search as *mut Search as isize)) };
     search.best.map(|b| (b.1, b.2, b.3)).ok_or_else(|| "couldn't find the page's content area on screen".into())
+}
+
+/// Restore the owning top-level window before querying its render widget or DOM geometry.
+pub(crate) fn restore_target(pid: u32) -> Result<(), String> {
+    struct Search { pids: HashSet<u32>, tops: Vec<HWND> }
+    unsafe extern "system" fn top(hwnd: HWND, data: LPARAM) -> BOOL {
+        let search = unsafe { &mut *(data.0 as *mut Search) };
+        let mut owner = 0;
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut owner)) };
+        if search.pids.contains(&owner) && unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            search.tops.push(hwnd);
+        }
+        true.into()
+    }
+    let mut search = Search { pids: process_tree(pid), tops: vec![] };
+    let _ = unsafe { EnumWindows(Some(top), LPARAM(&mut search as *mut Search as isize)) };
+    // Restore only a minimised app window. Normal foreground selection still uses its widget.
+    for top in search.tops {
+        if unsafe { IsIconic(top) }.as_bool() { bring_to_front(top); }
+    }
+    Ok(())
+}
+
+/// Temporary target placement for display validation; restores normal/maximised state on drop.
+pub(crate) struct TargetPlacement(HWND, windows::Win32::UI::WindowsAndMessaging::WINDOWPLACEMENT);
+impl Drop for TargetPlacement {
+    fn drop(&mut self) {
+        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::SetWindowPlacement(self.0, &self.1) };
+    }
+}
+pub(crate) fn place_on_monitor(pid: u32, area: (i32, i32, u32, u32)) -> Result<TargetPlacement, String> {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowPlacement, WINDOWPLACEMENT};
+    restore_target(pid)?;
+    let (top, _, _) = render_widget(pid)?;
+    let mut original = WINDOWPLACEMENT { length: size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
+    unsafe { GetWindowPlacement(top, &mut original) }.map_err(|e| e.to_string())?;
+    let saved = TargetPlacement(top, original);
+    unsafe {
+        let _ = ShowWindow(top, SW_RESTORE);
+        SetWindowPos(top, Some(HWND_TOP), area.0 + 40, area.1 + 220,
+            (area.2 as i32 - 80).max(300), (area.3 as i32 - 260).max(300), Default::default())
+    }.map_err(|e| e.to_string())?;
+    std::thread::sleep(Duration::from_millis(500));
+    Ok(saved)
 }

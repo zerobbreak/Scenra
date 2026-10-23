@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import Button from "./Button";
 import { openTeleprompter } from "./capture";
 import { AiStatus, Mode, Scenario, aiStatus, currentScript, draftScript, startSession, words } from "./script";
-import { launchChrome } from "./target";
+import { launchChrome, launchTarget } from "./target";
 
-const DEFAULT_URL = "https://lumina-web-production-e6ce.up.railway.app/";
+const DEFAULT_URL = "";
 const DEFAULT_BRIEF = "A friendly 60-second tour of Lumina for students: what it does in a lecture, then a look at revision flashcards.";
 
 export default function ScriptPanel() {
@@ -68,10 +68,17 @@ export default function ScriptPanel() {
         </p>
       )}
 
+      <Button disabled={!!busy} onClick={() => run("Launching Lumina demo...", async () => {
+        const profile = await launchTarget();
+        if (!profile.capabilities.cdp.available) throw new Error(profile.warnings.join("; "));
+        setNote("Local Lumina demo attached. Draft a script below.");
+      })}>Launch Lumina demo</Button>
+
       <div className="flex gap-2">
         <label className="sr-only" htmlFor="url">App URL</label>
         <input
           id="url"
+          placeholder="https://your-app.example"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           className="min-w-0 flex-1 rounded-md bg-zinc-900 px-3 py-1.5 text-sm ring-1 ring-zinc-700 focus:ring-indigo-500 focus:outline-none"
