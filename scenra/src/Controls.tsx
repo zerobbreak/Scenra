@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { closeTeleprompter } from "./capture";
 import { clearStop, restoreObsProfile, stopTake } from "./engine";
 import { onPrompter, sendPrompter } from "./prompter";
+import { cancelSceneSetup } from "./script";
 
 // Minimised control bar, design C2: design/scenra-canvas/CompactAction.dc.html (bottom nav).
 // Its own capture-excluded window, so it never appears in the video.
@@ -69,6 +70,7 @@ export default function Controls() {
   // Ends a scene take that's still recording (nothing to stop in a rehearsal), puts the
   // presenter's OBS profile back, then closes.
   async function stop() {
+    await cancelSceneSetup().catch(() => {});
     await stopTake().catch(() => {});
     await restoreObsProfile().catch(() => {});
     await closeTeleprompter();

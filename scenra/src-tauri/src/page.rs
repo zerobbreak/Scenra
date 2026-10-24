@@ -179,6 +179,70 @@ pub fn check_control(session: &mut Session, label: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Restore a URL and observe a new document before accepting a settled layout. A slow network
+/// response must not let the old, still-complete document pass the preflight.
+pub fn restore_url(port: u16, url: &str, timeout: Duration, checkpoint: &impl Fn() -> Result<(), String>) -> Result<(), String> {
+    checkpoint()?;
+    let deadline = Instant::now() + timeout;
+    let mut session = page_session(port)?;
+    session.call("Page.bringToFront", serde_json::json!({}))?;
+    let before = session.evaluate("performance.timeOrigin")?;
+    checkpoint()?;
+    let reply = session.call("Page.navigate", serde_json::json!({ "url": url }))?;
+    if reply.get("errorText").is_some() { return Err("Could not restore the starting page".into()); }
+    if reply.get("loaderId").is_none() {
+        checkpoint()?;
+        session.call("Page.reload", serde_json::json!({}))?;
+    }
+    loop {
+        checkpoint()?;
+        if let Ok(mut current) = page_session(port)
+            && let Ok(state) = current.evaluate("({url:location.href,origin:performance.timeOrigin})")
+            && state["url"].as_str() == Some(url) && state["origin"] != before
+        {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() { break; }
+            return wait_until_settled(port, left);
+        }
+        if Instant::now() >= deadline { break; }
+        std::thread::sleep(POLL);
+    }
+    Err("The starting page did not finish navigating; set it up manually and retry".into())
+}
+
+/// Setup-only CDP click: exact, unique, enabled and hit-tested, without moving the OS cursor.
+/// This never types into a field and never guesses another label.
+pub fn setup_click(session: &mut Session, label: &str, checkpoint: &impl Fn() -> Result<(), String>) -> Result<(), String> {
+    let expression = format!(r#"(() => {{
+      const clean = s => (s || '').replace(/\s+/g,' ').trim().toLowerCase();
+      const wanted = clean({});
+      const matches = [...document.querySelectorAll('a[href],button,[role=button]')].filter(e =>
+        e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden'
+        && clean(e.innerText || e.getAttribute('aria-label')) === wanted);
+      if (matches.length !== 1) return null;
+      const e = matches[0];
+      if (e.closest('form') || e.disabled || e.getAttribute('aria-disabled') === 'true') return null;
+      e.scrollIntoView({{block:'center',inline:'center',behavior:'instant'}});
+      const r = e.getBoundingClientRect(), x=r.left+r.width/2, y=r.top+r.height/2;
+      const hit = document.elementFromPoint(x,y);
+      return r.width>0 && r.height>0 && hit && (hit===e || e.contains(hit)) ? {{x,y}} : null;
+    }})()"#, serde_json::to_string(label).map_err(|e| e.to_string())?);
+    let point = session.evaluate(&expression)?;
+    let x = point["x"].as_f64().ok_or_else(|| format!("Setup target '{label}' is missing, ambiguous, disabled or covered"))?;
+    let y = point["y"].as_f64().ok_or("Setup target has no click position")?;
+    checkpoint()?;
+    let pressed = session.call("Input.dispatchMouseEvent", serde_json::json!({
+        "type":"mousePressed", "x":x, "y":y, "button":"left", "clickCount":1
+    }));
+    // Always release, even if the press acknowledgement failed.
+    let released = session.call("Input.dispatchMouseEvent", serde_json::json!({
+        "type":"mouseReleased", "x":x, "y":y, "button":"left", "clickCount":1
+    }));
+    pressed?;
+    released?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod initial_tests {
     use super::*;

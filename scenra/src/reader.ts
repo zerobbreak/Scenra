@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { TakeResult, startTake, stopTake, takePreflight } from "./engine";
-import { Action, Scenario, Session, approachAction, pressAction, checkSceneStart, resetScenePage, approveSceneStart, playbackGuard, playbackStatus, words } from "./script";
+import { Action, Scenario, Session, approachAction, pressAction, checkSceneStart, resetScenePage, approveSceneStart, prepareScene, playbackGuard, playbackStatus, words } from "./script";
 
 // Reads the script word by word at a speaking pace and fires each action as narration reaches
 // its trigger word. Until the narration state machine listens to the mic (PROJECT_OUTLINE §4),
@@ -51,6 +51,7 @@ export function useReader(script: Scenario | null, session: Session | null, paus
   const starting = useRef(false);
   const [needsSetup, setNeedsSetup] = useState(false);
   const [memoryWarning, setMemoryWarning] = useState<string | null>(null);
+  const [setupNote, setSetupNote] = useState<string | null>(null);
   const fired = useRef(new Set<string>());
   /// Takes started per scene, failed ones included, so a retake never reuses a folder.
   const attempts = useRef<Record<number, number>>({});
@@ -68,6 +69,7 @@ export function useReader(script: Scenario | null, session: Session | null, paus
     setLastError(null);
     setTakes([]);
     setMemoryWarning(null);
+    setSetupNote(null);
     setHalted(false);
     setNeedsSetup(false);
     fired.current.clear();
@@ -190,6 +192,7 @@ export function useReader(script: Scenario | null, session: Session | null, paus
     setPhase("starting");
     setPos({ scene, line: 0, word: 0 });
     setLastError(null);
+    setSetupNote(null);
     forgetScene(scene);
     let checked = false;
     try {
@@ -266,13 +269,28 @@ export function useReader(script: Scenario | null, session: Session | null, paus
     halted,
     memoryWarning,
     needsSetup,
-    setupPage: async (approve = false) => {
-      if (starting.current) return;
+    setupNote,
+    setupPage: async (mode: "reset" | "approve" | "replay" = "reset") => {
+      if (!script || starting.current || finished || phase !== "ready") return;
       starting.current = true;
       setPhase("starting");
-      try { if (approve) await approveSceneStart(pos.scene); else await resetScenePage(pos.scene); await checkSceneStart(pos.scene); setNeedsSetup(false); setLastError(null); }
-      catch (e) { setLastError(`Set up the page manually and retry: ${e}`); }
-      finally { starting.current = false; setPhase("ready"); }
+      setSetupNote(null);
+      setLastError(null);
+      try {
+        let note = "Starting page checked. Record when you are ready.";
+        if (mode === "approve") await approveSceneStart(pos.scene);
+        else if (mode === "replay") {
+          const result = await prepareScene(pos.scene, script);
+          note = result.actionsRun === 0 ? "Starting page restored; no earlier clicks were needed." : `Replayed ${result.actionsRun} approved click${result.actionsRun === 1 ? "" : "s"}. Ready to record.`;
+        } else await resetScenePage(pos.scene);
+        await checkSceneStart(pos.scene);
+        setNeedsSetup(false);
+        setMemoryWarning(null);
+        setSetupNote(note);
+      } catch (e) {
+        setNeedsSetup(true);
+        setLastError(`Setup stopped. Prepare the page manually or retry: ${e}`);
+      } finally { starting.current = false; setPhase("ready"); }
     },
     pos,
     phase,

@@ -195,9 +195,9 @@ function ReadyToRecord({ script, reader }: { script: Scenario; reader: Reader })
           {last && ` · scene ${last.scene + 1} saved (${seconds(last.take)})`}
         </p>
         <p style={SCRIPT_FONT} className="m-0 truncate text-xl font-semibold">{script.scenes[pos.scene].title}</p>
-        {(reader.lastError || reader.memoryWarning || (last && choppy(last.take))) && (
-          <p title={reader.lastError ?? reader.memoryWarning ?? (last ? choppy(last.take) ?? undefined : undefined)} className="m-0 truncate text-[11px] font-semibold text-[#FDE68A]">
-            {reader.lastError ?? reader.memoryWarning ?? `Scene ${last!.scene + 1}: ${choppy(last!.take)}`}
+        {(reader.lastError || reader.memoryWarning || reader.setupNote || (last && choppy(last.take))) && (
+          <p title={reader.lastError ?? reader.memoryWarning ?? reader.setupNote ?? (last ? choppy(last.take) ?? undefined : undefined)} className="m-0 truncate text-[11px] font-semibold text-[#FDE68A]">
+            {reader.lastError ?? reader.memoryWarning ?? reader.setupNote ?? `Scene ${last!.scene + 1}: ${choppy(last!.take)}`}
           </p>
         )}
       </div>
@@ -208,8 +208,13 @@ function ReadyToRecord({ script, reader }: { script: Scenario; reader: Reader })
           className="flex-none cursor-pointer rounded-full border-none bg-[#33363D] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#40444C]">
           Reset page
         </button>
+        {pos.scene > 0 && <button type="button" title="Restore the first scene's page and replay earlier approved clicks without recording. This changes the page."
+          onClick={() => reader.setupPage("replay")}
+          className="flex-none cursor-pointer rounded-full border-none bg-[#33363D] px-3 py-2.5 text-xs font-bold text-white hover:bg-[#40444C]">
+          Replay setup
+        </button>}
         <button type="button" title="Save the page you prepared as this scene's starting state."
-          onClick={() => reader.setupPage(true)}
+          onClick={() => reader.setupPage("approve")}
           className="flex-none cursor-pointer rounded-full border-none bg-[#33363D] px-3 py-2.5 text-xs font-bold text-white hover:bg-[#40444C]">
           Use current page
         </button>

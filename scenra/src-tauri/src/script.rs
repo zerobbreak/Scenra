@@ -16,10 +16,10 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State};
 
 #[derive(Default)]
-pub struct CurrentScript(Mutex<Option<Scenario>>);
+pub struct CurrentScript(pub(crate) Mutex<Option<Scenario>>);
 
 #[derive(Default)]
-pub struct ScriptInitialState(Mutex<Vec<page::InitialState>>);
+pub struct ScriptInitialState(pub(crate) Mutex<Vec<page::InitialState>>);
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,7 +56,9 @@ pub fn draft_script(
     script: State<'_, CurrentScript>,
     initial: State<'_, ScriptInitialState>,
     brief: String,
+    setup: State<'_, crate::setup::SetupState>,
 ) -> Result<Scenario, String> {
+    setup.ensure_idle()?;
     let provider = Gemini::from_store()?;
     let port = target::running_port(&targets)?;
     let mut page = page::page_session(port)?;
@@ -83,7 +85,8 @@ pub fn current_script(script: State<'_, CurrentScript>) -> Result<Option<Scenari
 
 /// Starts a pass through the script and tells the pill, which starts over in that mode.
 #[tauri::command]
-pub fn start_session(app: AppHandle, session: State<'_, CurrentSession>, mode: Mode) -> Result<Session, String> {
+pub fn start_session(app: AppHandle, session: State<'_, CurrentSession>, setup: State<'_, crate::setup::SetupState>, mode: Mode) -> Result<Session, String> {
+    setup.ensure_idle()?;
     let started = Session { mode, id: take::stamp() };
     *session.0.lock().map_err(err)? = Some(started.clone());
     app.emit("session-changed", &started).map_err(err)?;
@@ -98,13 +101,15 @@ pub fn current_session(session: State<'_, CurrentSession>) -> Result<Option<Sess
 /// Glides the real cursor onto the control labelled `target` and hover-verifies it, ahead of
 /// its trigger word.
 #[tauri::command(async)]
-pub fn approach_action(targets: State<'_, LaunchedTarget>, target: String) -> Result<(), String> {
+pub fn approach_action(targets: State<'_, LaunchedTarget>, setup: State<'_, crate::setup::SetupState>, target: String) -> Result<(), String> {
+    setup.ensure_idle()?;
     engine::approach(&targets, &Selector::Label(target), Pace::Natural).map(|_| ())
 }
 
 /// Clicks the control labelled `target` on its trigger word (re-aiming first if needed).
 #[tauri::command(async)]
-pub fn press_action(targets: State<'_, LaunchedTarget>, target: String, expires_at: u64) -> Result<(), String> {
+pub fn press_action(targets: State<'_, LaunchedTarget>, setup: State<'_, crate::setup::SetupState>, target: String, expires_at: u64) -> Result<(), String> {
+    setup.ensure_idle()?;
     let expiry = std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_millis(expires_at))
         .ok_or("Invalid action cue expiry")?;
     let remaining = expiry.duration_since(std::time::SystemTime::now())
@@ -160,11 +165,7 @@ pub fn reset_scene_page(
 ) -> Result<(), String> {
     let expected = initial.0.lock().map_err(err)?.get(scene).cloned().ok_or("Draft a script first")?;
     let port = target::running_port(&targets)?;
-    let mut page = page::page_session(port)?;
-    let result = page.call("Page.navigate", serde_json::json!({ "url": expected.url }))?;
-    if result.get("errorText").is_some() { return Err("Could not restore the starting page".into()); }
-
-    page::wait_until_settled(port, std::time::Duration::from_secs(15))
+    page::restore_url(port, &expected.url, std::time::Duration::from_secs(15), &|| Ok(()))
 }
 
 /// Presenter explicitly approves a manually prepared page as this scene's starting state.

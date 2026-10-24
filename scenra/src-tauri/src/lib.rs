@@ -15,6 +15,7 @@ mod ripple;
 mod script;
 mod secrets;
 mod settings;
+mod setup;
 mod take;
 mod target;
 
@@ -40,6 +41,7 @@ pub fn run() {
         .manage(script::ScriptInitialState::default())
         .manage(script::CurrentSession::default())
         .manage(take::CurrentTake::default())
+        .manage(setup::SetupState::default())
         .invoke_handler(tauri::generate_handler![
             capture::open_teleprompter,
             capture::resize_teleprompter,
@@ -58,6 +60,8 @@ pub fn run() {
             script::draft_script,
             script::current_script,
             script::check_scene_start,
+            setup::prepare_scene,
+            setup::cancel_scene_setup,
             script::reset_scene_page,
             script::approve_scene_start,
             script::start_session,

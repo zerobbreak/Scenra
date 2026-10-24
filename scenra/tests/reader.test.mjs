@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 
 // Exercise the actual hook with deterministic timers and IPC, without recording on the test host.
-function harness({ actions = [], mode = 'record', freeMemoryMb = 2048, failPress = false } = {}) {
+function harness({ actions = [], mode = 'record', freeMemoryMb = 2048, failPress = false, setupFails = false } = {}) {
   let slots = [], cursor = 0, effects = [], dirty = true, reader, now = 0, nextId = 0;
   let paused = false;
   const timers = new Map();
@@ -16,6 +16,7 @@ function harness({ actions = [], mode = 'record', freeMemoryMb = 2048, failPress
     words: line => line.text.split(/\s+/).filter(Boolean),
     checkSceneStart: async () => calls.push('check'),
     resetScenePage: async () => {}, approveSceneStart: async () => {},
+    prepareScene: async () => { calls.push("prepare"); if (setupFails) throw Error("Covered target"); return { actionsRun: 2 }; },
     playbackGuard: async active => { calls.push(active ? 'arm' : 'disarm'); },
     playbackStatus: async () => ({ interference: false, stopped: false }),
     approachAction: async () => calls.push('approach'),
@@ -127,4 +128,21 @@ test('action failure halts narration instead of saving a falsely successful scen
   assert.equal(h.reader.halted, true);
   assert.equal(h.reader.finished, false);
   assert.match(h.reader.lastError, /Simulated failure/);
+});
+
+test('replay setup checks the result and returns ready without starting OBS', async () => {
+  const h = harness(); await h.flush(); await h.reader.setupPage('replay'); await h.flush();
+  assert.equal(h.reader.phase, 'ready');
+  assert.match(h.reader.setupNote, /Replayed 2/);
+  assert.ok(h.calls.includes('prepare'));
+  assert.equal(h.calls.some(c => c.includes('scene-01-take')), false);
+});
+
+test('failed setup keeps manual recovery available without starting a take', async () => {
+  const h = harness({ setupFails: true }); await h.flush(); await h.reader.setupPage('replay'); await h.flush();
+  assert.equal(h.reader.phase, 'ready');
+  assert.equal(h.reader.needsSetup, true);
+  assert.match(h.reader.lastError, /Covered target/);
+  assert.equal(h.reader.setupNote, null);
+  assert.equal(h.calls.some(c => c.includes('scene-01-take')), false);
 });

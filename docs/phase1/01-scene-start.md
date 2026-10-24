@@ -22,7 +22,7 @@ cargo clippy -p scenra --all-targets -- -D warnings
 pnpm --filter scenra build
 ```
 
-The live test launches the built demo target and needs WebView2 loopback debugging access. It validates dialog blocking, manual recovery and navigation reset; it does not record through OBS. Whole-script rehearsal is still continuous. Fast-forward, setup scripts and persistent starting states are not implemented here.
+The live test launches the built demo target and needs WebView2 loopback debugging access. It validates dialog blocking, manual recovery and navigation reset; it does not record through OBS. Whole-script rehearsal is still continuous. Fast-forward is available through Replay setup; see `04-fast-forward-setup.md`. Project setup scripts and persistent starting states remain future work.
 
 ## Playback and retake regressions
 

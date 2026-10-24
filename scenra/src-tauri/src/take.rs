@@ -359,6 +359,21 @@ pub fn stop_take(take: State<'_, CurrentTake>, keep_profile: Option<bool>) -> Re
     })
 }
 
+impl CurrentTake {
+    /// Hold the take lock for setup, so another window cannot start OBS halfway through it.
+    pub(crate) fn while_idle<T>(&self, work: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+        let running = self.running.lock().map_err(err)?;
+        if running.is_some() { return Err("Stop the current take before preparing a scene".into()); }
+        let mut obs = Obs::connect().map_err(|e| format!("Cannot confirm OBS is idle: {e}"))?;
+        if obs.request("GetRecordStatus", json!({}))?["outputActive"] == true {
+            return Err("OBS is recording; stop it before preparing a scene".into());
+        }
+        let result = work();
+        drop(running);
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

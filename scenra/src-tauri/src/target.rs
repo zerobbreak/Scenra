@@ -503,6 +503,97 @@ mod tests {
         result.unwrap();
     }
 
+    /// T-7: a locked screen or covered window leaves the page hidden and unpainted, and a document
+    /// swap briefly leaves no root element. Preflight must say which, not "still loading".
+    #[test]
+    #[ignore = "launches the demo target window"]
+    fn settle_names_hidden_page_and_tolerates_missing_root() {
+        let user_data = std::env::temp_dir().join("scenra-test-hidden-target");
+        let (mut child, port) = spawn_demo_target(&user_data).unwrap();
+        let result = (|| -> Result<(), String> {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let mut page = loop {
+                match crate::page::page_session(port) {
+                    Ok(page) => break page,
+                    Err(e) if Instant::now() > deadline => return Err(e),
+                    Err(_) => std::thread::sleep(Duration::from_millis(200)),
+                }
+            };
+            page.evaluate("Object.defineProperty(document, 'visibilityState', { get: () => 'hidden' }); true")?;
+            let hidden = crate::page::wait_until_settled(port, Duration::from_secs(1)).unwrap_err();
+            assert!(hidden.contains("hidden"), "{hidden}");
+            page.evaluate("document.documentElement.remove(); true")?;
+            let rootless = crate::page::wait_until_settled(port, Duration::from_secs(1)).unwrap_err();
+            assert!(!rootless.contains("evaluate failed"), "{rootless}");
+            Ok(())
+        })();
+        let _ = child.kill(); let _ = child.wait();
+        result.unwrap();
+    }
+
+    #[test]
+    #[ignore = "launches the local fixture and replays approved CDP clicks"]
+    fn fast_forward_restores_dependent_scene_and_stops_on_cancel_or_covered_targets() {
+        use crate::ai::{Action, Line, Scenario, Scene};
+        let user_data = std::env::temp_dir().join(format!("scenra-test-setup-{}", crate::take::stamp()));
+        let (mut child, port) = spawn_demo_target(&user_data).unwrap();
+        let result = (|| -> Result<(), String> {
+            crate::page::wait_until_settled(port, Duration::from_secs(15))?;
+            let mut page = crate::page::page_session(port)?;
+            let baseline = crate::page::initial_state(&mut page)?;
+            let action = |target: &str, word| Action { word, target: target.into(), label: target.into() };
+            let scene = |title: &str, actions| Scene { title: title.into(), lines: vec![Line { text: "Open the control".into(), actions }] };
+            let mut scenario = Scenario { title: "Setup regression".into(), warnings: vec![], scenes: vec![
+                scene("Open recording", vec![action("New Recording", 2)]),
+                scene("Ready to start", vec![action("Start", 0)]),
+            ] };
+            let states = vec![baseline.clone(), baseline.clone()];
+            let outcome = crate::setup::replay_to_start(port, &scenario, &states, 1, || Ok(()))?;
+            assert_eq!(outcome.actions_run, 1);
+            let mut page = crate::page::page_session(port)?;
+            assert_eq!(page.evaluate("document.querySelector('[data-testid=recordings]').children.length")?, serde_json::json!(0));
+            crate::page::check_control(&mut page, "Start")?;
+            page.evaluate("document.addEventListener('click',e=>{window.__setupTrusted=e.isTrusted;},true); true")?;
+            crate::page::setup_click(&mut page, "Settings", &|| Ok(()))?;
+            assert_eq!(page.evaluate("window.__setupTrusted")?, serde_json::json!(true));
+            let settings = crate::page::initial_state(&mut page)?;
+            assert!(crate::page::setup_click(&mut page, "New Recording", &|| Ok(())).is_err());
+            scenario.scenes[0].lines[0].actions.push(action("Settings", 3));
+            scenario.scenes[1].lines[0].actions = vec![action("Confirm", 0)];
+            let states = vec![baseline.clone(), settings];
+            let outcome = crate::setup::replay_to_start(port, &scenario, &states, 1, || Ok(()))?;
+            assert_eq!(outcome.actions_run, 2);
+            let mut page = crate::page::page_session(port)?;
+            crate::page::check_control(&mut page, "Confirm")?;
+            // Reset first, then cancel as soon as the first approved click opens the panel.
+            crate::page::restore_url(port, &baseline.url, Duration::from_secs(15), &|| Ok(()))?;
+            let cancelled = std::cell::Cell::new(false);
+            let checkpoint = || {
+                if let Ok(mut page) = crate::page::page_session(port)
+                    && let Ok(open) = page.evaluate("!document.querySelector('[data-testid=recording-panel]').hidden")
+                    && open == serde_json::json!(true)
+                { cancelled.set(true); return Err("Cancelled after first click".into()); }
+                Ok(())
+            };
+            let outcome = crate::setup::replay_to_start(port, &scenario, &states, 1, checkpoint);
+            assert!(outcome.err().unwrap().contains("Cancelled after first click"));
+            assert!(cancelled.get());
+            let mut page = crate::page::page_session(port)?;
+            assert_eq!(page.evaluate("document.querySelector('dialog').open")?, serde_json::json!(false));
+            // Cancellation after locating but before pressing must not dispatch a click.
+            page.evaluate("window.__setupClicks=0;document.addEventListener('click',()=>{window.__setupClicks++;},true); true")?;
+            let count = page.evaluate("window.__setupClicks")?;
+            assert!(crate::page::setup_click(&mut page, "New Recording", &|| Err("Cancelled before press".into())).is_err());
+            assert_eq!(page.evaluate("window.__setupClicks")?, count);
+            // Duplicate labels are refused rather than guessing which one the script meant.
+            page.evaluate("{const b=document.createElement('button');b.textContent='New Recording';document.body.append(b);} true")?;
+            assert!(crate::page::setup_click(&mut page, "New Recording", &|| Ok(())).is_err());
+            Ok(())
+        })();
+        let _ = child.kill(); let _ = child.wait();
+        result.unwrap();
+    }
+
     /// Local-only Chrome regression: the first click runs after a delayed page paint/settle.
     #[test]
     #[ignore = "launches Chrome and moves the real pointer"]
@@ -538,8 +629,20 @@ mod tests {
         let result = match spawned {
             Ok((mut child, port)) => {
                 let result = (|| -> Result<(), String> {
-                    crate::page::wait_until_settled(port, Duration::from_secs(15))?;
+                    crate::page::page_session(port)?.call("Page.bringToFront", serde_json::json!({}))?;
+                    crate::page::wait_until_settled(port, Duration::from_secs(15)).map_err(|e| {
+                        let state = crate::page::page_session(port).and_then(|mut p| p.evaluate("({ready:document.readyState,visibility:document.visibilityState,fonts:document.fonts.status,paint:performance.getEntriesByType('paint').map(p=>p.name)})"));
+                        format!("initial Chrome preflight: {e}; {state:?}")
+                    })?;
                     let mut page = crate::page::page_session(port)?;
+                    let old_document = page.evaluate("performance.timeOrigin")?;
+                    let url = crate::page::initial_state(&mut page)?.url;
+                    crate::page::restore_url(port, &url, Duration::from_secs(15), &|| Ok(())).map_err(|e| {
+                        let state = crate::page::page_session(port).and_then(|mut p| p.evaluate("({ready:document.readyState,visibility:document.visibilityState,fonts:document.fonts.status,paint:performance.getEntriesByType('paint').map(p=>p.name)})"));
+                        format!("Chrome reset: {e}; {state:?}")
+                    })?;
+                    let mut page = crate::page::page_session(port)?;
+                    assert_ne!(page.evaluate("performance.timeOrigin")?, old_document, "restore returned before the delayed navigation created a new document");
                     let selector = crate::locate::Selector::TestId("create-recording".into());
                     let probe = crate::locate::probe(&mut page, child.id(), &selector, crate::input::Pace::Natural).map_err(|e| e.to_string())?;
                     assert!(probe.passed, "Chrome hover probe missed");

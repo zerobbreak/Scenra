@@ -15,7 +15,7 @@ use std::time::Duration;
 pub const GEMINI_MODELS: [&str; 2] = ["gemini-2.5-flash", "gemini-flash-lite-latest"];
 const ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Scenario {
     pub title: String,
@@ -24,21 +24,21 @@ pub struct Scenario {
     pub warnings: Vec<String>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Scene {
     pub title: String,
     pub lines: Vec<Line>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Line {
     pub text: String,
     pub actions: Vec<Action>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Action {
     /// Index into `text.split_whitespace()`: the action fires when narration reaches this word.

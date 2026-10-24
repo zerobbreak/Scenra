@@ -38,3 +38,7 @@ export const approveSceneStart = (scene: number) => invoke<void>("approve_scene_
 
 export const playbackGuard = (active: boolean) => invoke<void>("playback_guard", { active });
 export const playbackStatus = () => invoke<{foreign: number; stopped: boolean; interference: boolean}>("guard_status");
+
+export type SetupResult = { actionsRun: number };
+export const prepareScene = (scene: number, scenario: Scenario) => invoke<SetupResult>("prepare_scene", { request: { scene, scenario, requestId: Date.now() } });
+export const cancelSceneSetup = () => invoke<void>("cancel_scene_setup");
