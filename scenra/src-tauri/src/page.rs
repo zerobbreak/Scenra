@@ -137,21 +137,25 @@ pub fn wait_until_settled(port: u16, timeout: Duration) -> Result<(), String> {
 }
 
 /// Local-only starting state. URLs never enter the AI outline or error messages.
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct InitialState {
     pub url: String,
     pub headings: Vec<String>,
     pub dialogs: Vec<String>,
 }
 
-pub fn initial_state(session: &mut Session) -> Result<InitialState, String> {
-    serde_json::from_value(session.evaluate(r#"(() => {
+/// A JS function returning the page's [`InitialState`]. Teach mode calls the same function in the
+/// page just before each click, so taught states compare equal to ones read here.
+pub(crate) const INITIAL_STATE_FN: &str = r#"() => {
       const visible = e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
       const clean = e => (e.innerText || e.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().slice(0,120);
       return { url: location.href,
         headings: [...document.querySelectorAll('h1,h2,h3')].filter(visible).map(clean),
         dialogs: [...document.querySelectorAll('dialog[open],[role=dialog],[aria-modal=true]')].filter(visible).map(clean) };
-    })()"#)?).map_err(|e| e.to_string())
+    }"#;
+
+pub fn initial_state(session: &mut Session) -> Result<InitialState, String> {
+    serde_json::from_value(session.evaluate(&format!("({INITIAL_STATE_FN})()"))?).map_err(|e| e.to_string())
 }
 
 pub fn check_initial(expected: &InitialState, actual: &InitialState) -> Result<(), String> {

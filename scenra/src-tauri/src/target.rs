@@ -168,7 +168,7 @@ fn spawn_chrome(url: &str, profile: &Path) -> Result<(Child, u16), String> {
 }
 
 /// Starts the demo target with a debug port and waits until DevTools answers.
-fn spawn_demo_target(user_data: &Path) -> Result<(Child, u16), String> {
+pub(crate) fn spawn_demo_target(user_data: &Path) -> Result<(Child, u16), String> {
     let exe = PathBuf::from(DEMO_TARGET_EXE);
     if !exe.exists() {
         return Err(format!(

@@ -18,6 +18,7 @@ mod settings;
 mod setup;
 mod take;
 mod target;
+mod teach;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -42,6 +43,7 @@ pub fn run() {
         .manage(script::CurrentSession::default())
         .manage(take::CurrentTake::default())
         .manage(setup::SetupState::default())
+        .manage(teach::TeachState::default())
         .invoke_handler(tauri::generate_handler![
             capture::open_teleprompter,
             capture::resize_teleprompter,
@@ -83,6 +85,9 @@ pub fn run() {
             take::start_take,
             take::stop_take,
             take::restore_obs_profile,
+            teach::start_teach,
+            teach::stop_teach,
+            teach::last_teach,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -4,13 +4,16 @@
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use std::io::{Read, Write};
+use std::collections::VecDeque;
+use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
+/// Events kept while a call waits for its reply. Sessions that never read events keep only the latest.
+const MAX_QUEUED_EVENTS: usize = 256;
 
 /// `GET /json/version`.
 #[derive(Deserialize)]
@@ -86,18 +89,25 @@ fn get_json<T: DeserializeOwned>(port: u16, path: &str) -> Result<T, String> {
 pub struct Session {
     socket: WebSocket<MaybeTlsStream<TcpStream>>,
     next_id: u64,
+    /// Events that arrived while a call waited for its reply, oldest first.
+    events: VecDeque<Value>,
 }
 
 impl Session {
     pub fn connect(ws_url: &str) -> Result<Self, String> {
-        let (socket, _) = tungstenite::connect(ws_url).map_err(err)?;
-        if let MaybeTlsStream::Plain(stream) = socket.get_ref() {
-            stream.set_read_timeout(Some(TIMEOUT)).map_err(err)?;
-        }
-        Ok(Self { socket, next_id: 0 })
+        // Time out the handshake too, so an endpoint that accepts and never answers can't hang
+        // the caller.
+        let host = ws_url.strip_prefix("ws://").and_then(|rest| rest.split('/').next()).ok_or("not a ws:// DevTools URL")?;
+        let addr = std::net::ToSocketAddrs::to_socket_addrs(host).map_err(err)?.next().ok_or("DevTools URL has no address")?;
+        let stream = TcpStream::connect_timeout(&addr, TIMEOUT).map_err(err)?;
+        stream.set_read_timeout(Some(TIMEOUT)).map_err(err)?;
+        stream.set_write_timeout(Some(TIMEOUT)).map_err(err)?;
+        let (socket, _) = tungstenite::client(ws_url, MaybeTlsStream::Plain(stream)).map_err(err)?;
+        Ok(Self { socket, next_id: 0, events: VecDeque::new() })
     }
 
-    /// Sends a command and waits for its reply. Events received meanwhile are dropped.
+    /// Sends a command and waits for its reply. Events received meanwhile are queued for
+    /// [`Session::next_event`].
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.next_id += 1;
         let id = self.next_id;
@@ -106,6 +116,10 @@ impl Session {
         loop {
             let Message::Text(text) = self.socket.read().map_err(err)? else { continue };
             let mut reply: Value = serde_json::from_str(&text).map_err(err)?;
+            if reply.get("method").is_some() && reply.get("id").is_none() {
+                self.queue(reply);
+                continue;
+            }
             if reply["id"] != id {
                 continue;
             }
@@ -127,5 +141,108 @@ impl Session {
             return Err(format!("evaluate failed: {}", message.as_str().unwrap_or("unknown error")));
         }
         Ok(result["result"]["value"].take())
+    }
+
+    /// The next event (`{method, params}`), waiting up to `timeout`; `None` if none arrived.
+    pub fn next_event(&mut self, timeout: Duration) -> Result<Option<Value>, String> {
+        if let Some(event) = self.events.pop_front() {
+            return Ok(Some(event));
+        }
+        let MaybeTlsStream::Plain(stream) = self.socket.get_ref() else {
+            return Err("CDP events need a plain loopback connection".into());
+        };
+        // A zero timeout would mean "block forever".
+        stream.set_read_timeout(Some(timeout.max(Duration::from_millis(1)))).map_err(err)?;
+        let read = loop {
+            match self.socket.read() {
+                Ok(Message::Text(text)) => {
+                    let message: Value = serde_json::from_str(&text).map_err(err)?;
+                    if message.get("method").is_some() && message.get("id").is_none() {
+                        break Ok(Some(message));
+                    }
+                }
+                Ok(_) => {}
+                Err(tungstenite::Error::Io(e)) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                    break Ok(None);
+                }
+                Err(e) => break Err(err(e)),
+            }
+        };
+        if let MaybeTlsStream::Plain(stream) = self.socket.get_ref() {
+            stream.set_read_timeout(Some(TIMEOUT)).map_err(err)?;
+        }
+        read
+    }
+
+    fn queue(&mut self, event: Value) {
+        if self.events.len() == MAX_QUEUED_EVENTS {
+            self.events.pop_front();
+        }
+        self.events.push_back(event);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{Ipv4Addr, TcpListener};
+
+    /// A one-connection DevTools stand-in: sends an event, then answers the first call with
+    /// another event ahead of the reply.
+    fn fake_devtools() -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let url = format!("ws://{}/devtools/page/test", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            let send = |socket: &mut WebSocket<TcpStream>, value: Value| socket.send(Message::text(value.to_string())).unwrap();
+            send(&mut socket, json!({ "method": "Runtime.bindingCalled", "params": { "payload": "first" } }));
+            let Message::Text(request) = socket.read().unwrap() else { panic!("expected a call") };
+            let id = serde_json::from_str::<Value>(&request).unwrap()["id"].clone();
+            send(&mut socket, json!({ "method": "Runtime.bindingCalled", "params": { "payload": "second" } }));
+            send(&mut socket, json!({ "id": id, "result": { "ok": true } }));
+            // Keep the connection open until the client hangs up.
+            while socket.read().is_ok() {}
+        });
+        (url, server)
+    }
+
+    #[test]
+    fn events_received_during_a_call_are_kept_in_order() {
+        let (url, server) = fake_devtools();
+        let mut session = Session::connect(&url).unwrap();
+        assert_eq!(session.call("Runtime.addBinding", json!({})).unwrap()["ok"], json!(true));
+        let payloads: Vec<_> = (0..2)
+            .map(|_| session.next_event(Duration::from_secs(2)).unwrap().unwrap()["params"]["payload"].clone())
+            .collect();
+        assert_eq!(payloads, [json!("first"), json!("second")]);
+        drop(session);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn connect_gives_up_on_an_endpoint_that_never_answers_the_handshake() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let url = format!("ws://{}/devtools/page/gone", listener.local_addr().unwrap());
+        // Accept, then say nothing.
+        let silent = std::thread::spawn(move || listener.accept().map(|(stream, _)| stream));
+        let started = std::time::Instant::now();
+        assert!(Session::connect(&url).is_err());
+        assert!(started.elapsed() < TIMEOUT + Duration::from_secs(2));
+        drop(silent.join());
+    }
+
+    #[test]
+    fn next_event_times_out_without_an_event() {
+        let (url, server) = fake_devtools();
+        let mut session = Session::connect(&url).unwrap();
+        assert!(session.next_event(Duration::from_secs(2)).unwrap().is_some());
+        let started = std::time::Instant::now();
+        assert!(session.next_event(Duration::from_millis(150)).unwrap().is_none());
+        assert!(started.elapsed() < Duration::from_secs(2));
+        // The session still works for calls after a timed-out read.
+        assert_eq!(session.call("Runtime.addBinding", json!({})).unwrap()["ok"], json!(true));
+        drop(session);
+        server.join().unwrap();
     }
 }

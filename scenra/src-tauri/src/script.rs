@@ -57,8 +57,10 @@ pub fn draft_script(
     initial: State<'_, ScriptInitialState>,
     brief: String,
     setup: State<'_, crate::setup::SetupState>,
+    teach: State<'_, crate::teach::TeachState>,
 ) -> Result<Scenario, String> {
     setup.ensure_idle()?;
+    teach.ensure_idle()?;
     let provider = Gemini::from_store()?;
     let port = target::running_port(&targets)?;
     let mut page = page::page_session(port)?;
@@ -85,8 +87,12 @@ pub fn current_script(script: State<'_, CurrentScript>) -> Result<Option<Scenari
 
 /// Starts a pass through the script and tells the pill, which starts over in that mode.
 #[tauri::command]
-pub fn start_session(app: AppHandle, session: State<'_, CurrentSession>, setup: State<'_, crate::setup::SetupState>, mode: Mode) -> Result<Session, String> {
+pub fn start_session(
+    app: AppHandle, session: State<'_, CurrentSession>, setup: State<'_, crate::setup::SetupState>,
+    teach: State<'_, crate::teach::TeachState>, mode: Mode,
+) -> Result<Session, String> {
     setup.ensure_idle()?;
+    teach.ensure_idle()?;
     let started = Session { mode, id: take::stamp() };
     *session.0.lock().map_err(err)? = Some(started.clone());
     app.emit("session-changed", &started).map_err(err)?;

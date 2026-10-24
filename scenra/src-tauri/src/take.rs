@@ -360,6 +360,11 @@ pub fn stop_take(take: State<'_, CurrentTake>, keep_profile: Option<bool>) -> Re
 }
 
 impl CurrentTake {
+    /// Whether a take is recording right now.
+    pub(crate) fn is_recording(&self) -> bool {
+        self.running.lock().map(|running| running.is_some()).unwrap_or(true)
+    }
+
     /// Hold the take lock for setup, so another window cannot start OBS halfway through it.
     pub(crate) fn while_idle<T>(&self, work: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
         let running = self.running.lock().map_err(err)?;

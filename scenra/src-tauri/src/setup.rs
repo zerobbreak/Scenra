@@ -50,6 +50,7 @@ pub fn prepare_scene(
     script: State<'_, script::CurrentScript>, initial: State<'_, script::ScriptInitialState>,
     take: State<'_, take::CurrentTake>, setup: State<'_, SetupState>, request: SetupRequest,
 ) -> Result<SetupResult, String> {
+    app.state::<crate::teach::TeachState>().ensure_idle()?;
     let _run = setup.claim()?;
     if request.request_id == 0 || request.request_id > epoch_ms().saturating_add(1000) {
         return Err("Invalid setup request; retry from the prompter".into());
@@ -88,7 +89,7 @@ fn epoch_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
 }
 
-fn single_page(port: u16) -> Result<(), String> {
+pub(crate) fn single_page(port: u16) -> Result<(), String> {
     if cdp::targets(port)?.iter().filter(|t| t.kind == "page").count() != 1 {
         return Err("Replay setup needs one target tab. Close extra tabs and prepare the page manually".into());
     }
