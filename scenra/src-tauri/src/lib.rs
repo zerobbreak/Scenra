@@ -88,7 +88,8 @@ pub fn run() {
             take::restore_obs_profile,
             teach::start_teach,
             teach::stop_teach,
-            teach::last_teach,
+            teach::teach_state,
+            teach::delete_teach_step,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -366,9 +366,37 @@ pub fn stop_teach(teach: State<'_, TeachState>) -> Result<TeachSession, String> 
     Ok(session)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeachStatus {
+    active: bool,
+    last: Option<TeachSession>,
+}
+
+/// Whether teaching is running, and the last finished walkthrough.
 #[tauri::command]
-pub fn last_teach(teach: State<'_, TeachState>) -> Result<Option<TeachSession>, String> {
-    teach.last()
+pub fn teach_state(teach: State<'_, TeachState>) -> Result<TeachStatus, String> {
+    let active = teach.active.lock().map_err(|e| e.to_string())?.is_some();
+    Ok(TeachStatus { active, last: teach.last()? })
+}
+
+/// Removes a step from the last walkthrough (e.g. a stray click) and renumbers the rest.
+#[tauri::command]
+pub fn delete_teach_step(teach: State<'_, TeachState>, index: usize) -> Result<TeachSession, String> {
+    teach.ensure_idle()?;
+    let mut last = teach.last.lock().map_err(|e| e.to_string())?;
+    let session = last.as_mut().ok_or("Teach a walkthrough first")?;
+    remove_step(session, index)?;
+    Ok(session.clone())
+}
+
+fn remove_step(session: &mut TeachSession, index: usize) -> Result<(), String> {
+    if index >= session.steps.len() {
+        return Err("That step no longer exists".into());
+    }
+    session.steps.remove(index);
+    session.steps = finish(std::mem::take(&mut session.steps));
+    Ok(())
 }
 
 #[cfg(test)]
@@ -503,6 +531,21 @@ mod tests {
         })();
         let _ = child.kill(); let _ = child.wait();
         result.unwrap();
+    }
+
+    #[test]
+    fn removing_a_step_renumbers_the_rest() {
+        let mut session = TeachSession {
+            start: state("http://localhost/"), end: state("http://localhost/"), warnings: vec![],
+            steps: finish(vec![
+                step_from(raw(100.0, "control", "New Recording", true), 0.0),
+                step_from(raw(200.0, "other", "", false), 0.0),
+                step_from(raw(300.0, "control", "Settings", true), 0.0),
+            ]),
+        };
+        remove_step(&mut session, 1).unwrap();
+        assert_eq!(session.steps.iter().map(|s| (s.index, s.label.as_str())).collect::<Vec<_>>(), [(0, "New Recording"), (1, "Settings")]);
+        assert!(remove_step(&mut session, 2).is_err());
     }
 
     #[test]

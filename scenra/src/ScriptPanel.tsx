@@ -3,6 +3,7 @@ import Button from "./Button";
 import { openTeleprompter } from "./capture";
 import { AiStatus, Mode, Scenario, aiStatus, currentScript, draftScript, startSession, words } from "./script";
 import { launchChrome, launchTarget } from "./target";
+import TeachPanel from "./TeachPanel";
 
 const DEFAULT_URL = "";
 const DEFAULT_BRIEF = "A friendly 60-second tour of Lumina for students: what it does in a lecture, then a look at revision flashcards.";
@@ -121,6 +122,8 @@ export default function ScriptPanel() {
           </Button>
         </div>
       </div>
+
+      <TeachPanel brief={brief} busy={!!busy} aiConfigured={!!status?.configured} run={run} onScript={setScript} />
 
       {busy && <p className="text-sm text-indigo-300">{busy}</p>}
       {note && <p className="text-sm text-emerald-300">{note}</p>}
