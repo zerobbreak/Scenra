@@ -58,21 +58,28 @@ pub fn outline(session: &mut Session) -> Result<PageOutline, String> {
 
 /// What the page looks like right now: whether it has loaded and painted, plus a fingerprint of
 /// its size and layout. Two equal fingerprints a while apart mean nothing is still moving.
+/// A document swap can briefly leave no root element, which counts as not ready rather than failing.
 const SNAPSHOT_JS: &str = r#"(() => {
   const painted = performance.getEntriesByType('paint').some((e) => e.name === 'first-contentful-paint');
-  const ready = document.readyState === 'complete' && document.visibilityState === 'visible'
-    && document.fonts.status === 'loaded' && painted;
+  const hidden = document.visibilityState !== 'visible';
   const root = document.documentElement;
-  const layout = [innerWidth, innerHeight, root.scrollWidth, root.scrollHeight,
+  const ready = document.readyState === 'complete' && !hidden
+    && document.fonts.status === 'loaded' && painted && !!root;
+  const layout = [innerWidth, innerHeight, root?.scrollWidth ?? 0, root?.scrollHeight ?? 0,
     document.getElementsByTagName('*').length].join(',');
-  return { ready, layout };
+  return { ready, hidden, layout };
 })()"#;
 
 #[derive(Deserialize)]
 struct Snapshot {
     ready: bool,
+    hidden: bool,
     layout: String,
 }
+
+const LOADING: &str = "the target page hasn't finished loading and painting";
+/// Chrome stops painting a minimised or fully covered window (T-7), so it never settles.
+const HIDDEN: &str = "the target window is hidden (minimised, covered by another window, or the screen is locked); bring it to the front and retry";
 
 /// How long the layout has to hold still before the page counts as settled.
 const STILL_FOR: Duration = Duration::from_millis(600);
@@ -87,7 +94,7 @@ pub fn wait_until_settled(port: u16, timeout: Duration) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
     let mut session: Option<Session> = None;
     let mut still_since: Option<(Instant, String)> = None;
-    let mut last_error = String::from("the target page hasn't finished loading and painting");
+    let mut last_error = String::from(LOADING);
     loop {
         let snapshot = match session.as_mut() {
             Some(open) => open.evaluate(SNAPSHOT_JS).and_then(|v| serde_json::from_value(v).map_err(|e| e.to_string())),
@@ -99,7 +106,7 @@ pub fn wait_until_settled(port: u16, timeout: Duration) -> Result<(), String> {
         };
         let now = Instant::now();
         still_since = match snapshot {
-            Ok(Snapshot { ready: true, layout }) => match still_since {
+            Ok(Snapshot { ready: true, layout, .. }) => match still_since {
                 Some((since, previous)) if previous == layout => {
                     if now - since >= STILL_FOR {
                         return Ok(());
@@ -112,7 +119,10 @@ pub fn wait_until_settled(port: u16, timeout: Duration) -> Result<(), String> {
                 }
                 None => Some((now, layout)),
             },
-            Ok(Snapshot { ready: false, .. }) => None,
+            Ok(Snapshot { ready: false, hidden, .. }) => {
+                last_error = if hidden { HIDDEN } else { LOADING }.into();
+                None
+            }
             Err(e) => {
                 last_error = e;
                 session = None;

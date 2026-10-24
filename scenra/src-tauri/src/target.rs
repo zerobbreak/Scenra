@@ -511,20 +511,16 @@ mod tests {
         let user_data = std::env::temp_dir().join("scenra-test-hidden-target");
         let (mut child, port) = spawn_demo_target(&user_data).unwrap();
         let result = (|| -> Result<(), String> {
-            let deadline = Instant::now() + Duration::from_secs(15);
-            let mut page = loop {
-                match crate::page::page_session(port) {
-                    Ok(page) => break page,
-                    Err(e) if Instant::now() > deadline => return Err(e),
-                    Err(_) => std::thread::sleep(Duration::from_millis(200)),
-                }
-            };
+            // Settle first: an override applied during the initial navigation is lost with that document.
+            crate::page::wait_until_settled(port, Duration::from_secs(15))?;
+            let mut page = crate::page::page_session(port)?;
             page.evaluate("Object.defineProperty(document, 'visibilityState', { get: () => 'hidden' }); true")?;
-            let hidden = crate::page::wait_until_settled(port, Duration::from_secs(1)).unwrap_err();
-            assert!(hidden.contains("hidden"), "{hidden}");
+            // Failures return Err rather than panic, so the demo target is always killed below.
+            let hidden = crate::page::wait_until_settled(port, Duration::from_secs(1)).err().unwrap_or_default();
+            if !hidden.contains("hidden") { return Err(format!("hidden page not named: {hidden:?}")); }
             page.evaluate("document.documentElement.remove(); true")?;
-            let rootless = crate::page::wait_until_settled(port, Duration::from_secs(1)).unwrap_err();
-            assert!(!rootless.contains("evaluate failed"), "{rootless}");
+            let rootless = crate::page::wait_until_settled(port, Duration::from_secs(1)).err().unwrap_or_default();
+            if rootless.is_empty() || rootless.contains("evaluate failed") { return Err(format!("rootless page: {rootless:?}")); }
             Ok(())
         })();
         let _ = child.kill(); let _ = child.wait();
@@ -629,7 +625,23 @@ mod tests {
         let result = match spawned {
             Ok((mut child, port)) => {
                 let result = (|| -> Result<(), String> {
+                    use windows::Win32::UI::WindowsAndMessaging::{IsIconic, ShowWindow, SW_MINIMIZE};
                     crate::page::page_session(port)?.call("Page.bringToFront", serde_json::json!({}))?;
+                    // T-7: a minimised Chrome never paints. Preflight names it, and restoring the
+                    // window (as scene start, reset and setup do) lets the page settle.
+                    let deadline = Instant::now() + Duration::from_secs(15);
+                    let top = loop {
+                        match crate::locate::render_widget(child.id()) {
+                            Ok((top, _, _)) => break top,
+                            Err(e) if Instant::now() > deadline => return Err(e),
+                            Err(_) => std::thread::sleep(Duration::from_millis(200)),
+                        }
+                    };
+                    unsafe { let _ = ShowWindow(top, SW_MINIMIZE); }
+                    let hidden = crate::page::wait_until_settled(port, Duration::from_secs(3)).err().unwrap_or_default();
+                    if !hidden.contains("hidden") { return Err(format!("minimised Chrome should be reported hidden, got {hidden:?}")); }
+                    crate::locate::restore_target(child.id())?;
+                    if unsafe { IsIconic(top) }.as_bool() { return Err("restore_target left Chrome minimised".into()); }
                     crate::page::wait_until_settled(port, Duration::from_secs(15)).map_err(|e| {
                         let state = crate::page::page_session(port).and_then(|mut p| p.evaluate("({ready:document.readyState,visibility:document.visibilityState,fonts:document.fonts.status,paint:performance.getEntriesByType('paint').map(p=>p.name)})"));
                         format!("initial Chrome preflight: {e}; {state:?}")
@@ -642,13 +654,18 @@ mod tests {
                         format!("Chrome reset: {e}; {state:?}")
                     })?;
                     let mut page = crate::page::page_session(port)?;
-                    assert_ne!(page.evaluate("performance.timeOrigin")?, old_document, "restore returned before the delayed navigation created a new document");
+                    // Failures return Err rather than panic, so Chrome is always killed below.
+                    if page.evaluate("performance.timeOrigin")? == old_document {
+                        return Err("restore returned before the delayed navigation created a new document".into());
+                    }
                     let selector = crate::locate::Selector::TestId("create-recording".into());
                     let probe = crate::locate::probe(&mut page, child.id(), &selector, crate::input::Pace::Natural).map_err(|e| e.to_string())?;
-                    assert!(probe.passed, "Chrome hover probe missed");
+                    if !probe.passed { return Err("Chrome hover probe missed".into()); }
                     crate::input::click().map_err(|e| e.to_string())?;
                     std::thread::sleep(Duration::from_millis(250));
-                    assert_eq!(page.evaluate("!document.querySelector('[data-testid=recording-panel]').hidden")?, serde_json::json!(true));
+                    if page.evaluate("!document.querySelector('[data-testid=recording-panel]').hidden")? != serde_json::json!(true) {
+                        return Err("the first click didn't open the recording panel".into());
+                    }
                     Ok(())
                 })();
                 let _ = child.kill(); let _ = child.wait(); result

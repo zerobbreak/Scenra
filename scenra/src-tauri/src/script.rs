@@ -164,7 +164,8 @@ pub fn reset_scene_page(
     targets: State<'_, LaunchedTarget>, initial: State<'_, ScriptInitialState>, scene: usize,
 ) -> Result<(), String> {
     let expected = initial.0.lock().map_err(err)?.get(scene).cloned().ok_or("Draft a script first")?;
-    let port = target::running_port(&targets)?;
+    let (pid, port) = target::running(&targets)?;
+    crate::locate::restore_target(pid)?;
     page::restore_url(port, &expected.url, std::time::Duration::from_secs(15), &|| Ok(()))
 }
 
@@ -176,7 +177,8 @@ pub fn approve_scene_start(
 ) -> Result<(), String> {
     let scenario = script.0.lock().map_err(err)?.clone().ok_or("Draft a script first")?;
     let selected = scenario.scenes.get(scene).ok_or("Unknown scene")?;
-    let port = target::running_port(&targets)?;
+    let (pid, port) = target::running(&targets)?;
+    crate::locate::restore_target(pid)?;
     page::wait_until_settled(port, std::time::Duration::from_secs(15))?;
     let mut page = page::page_session(port)?;
     if let Some(action) = selected.lines.iter().flat_map(|l| &l.actions).next() {

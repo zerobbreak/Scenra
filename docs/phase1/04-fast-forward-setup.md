@@ -28,6 +28,14 @@ cargo test -p scenra --lib chrome_preflight_then_first_click -- --ignored --noca
 
 The local fixture regression recreates the recording panel with one approved click, reaches a Settings-dependent scene with two clicks, verifies trusted events, refuses covered/duplicate targets, and cancels between actions and immediately before a press. It never clicks the target scene's own action. The Chrome regression deliberately delays page responses and verifies that reset observes a different document before the first click. Unit tests cover exclusive setup, ordered actions, queued cancellation and the action limit. Reader tests ensure success/failure return to Ready without starting OBS.
 
-Chrome validation remains pending on this run: the debug port answered, but the fixture document reported hidden with no paint entries; a native-window diagnostic could not find its page content area. Strict visibility/paint requirements and the regression are retained. This does not establish Chrome reset/fast-forward success; the dependent-scene live coverage uses the bundled WebView2 target.
-
 Final checks (2026-10-23): 34 native tests passed, including five live WebView2 regressions; seven reader tests, the frontend production build and strict Clippy passed. The native run excluded Gemini, real OBS recording, and the separately tracked Chrome fixture check (T-7).
+
+## Chrome hidden window (T-7, resolved 2026-10-24)
+
+The 2026-10-23 Chrome failure (`readyState` complete, fonts loaded, no paint entries, `visibilityState` hidden, no visible content area) is what Chrome reports for a minimised or fully covered window: it stops painting, so the strict preflight correctly refused it. Minimising the fixture's Chrome window reproduced the exact state on demand. Six unminimised runs passed, sandboxed and not.
+
+- Preflight now names the cause ("the target window is hidden (minimised, covered by another window, or the screen is locked)") instead of "hasn't finished loading and painting", and tolerates a document swap that briefly has no root element.
+- **Reset page** and **Use current page** now restore a minimised target first, as scene start and Replay setup already did. A window that is covered but not minimised is still refused; bring it to the front and retry.
+- The Chrome regression now minimises Chrome on purpose, expects the hidden error, restores the window, then verifies delayed reset and the first click. The live tests return errors instead of panicking inside their closures, so a failure no longer leaves the target running (which had hung the test runner).
+
+Checks (2026-10-24): Chrome regression and hidden-page regression 3/3 each; 36 native tests (all seven live regressions, run with `--test-threads=1` because live tests share one desktop), seven reader tests, frontend build and strict Clippy passed. Not run: Gemini drafting and the real OBS recording test.
