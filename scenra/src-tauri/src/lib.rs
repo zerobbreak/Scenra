@@ -60,6 +60,7 @@ pub fn run() {
             target::stop_target,
             script::ai_status,
             script::draft_script,
+            script::draft_from_teach,
             script::current_script,
             script::check_scene_start,
             setup::prepare_scene,

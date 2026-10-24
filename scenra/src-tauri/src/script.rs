@@ -10,6 +10,7 @@ use crate::input::Pace;
 use crate::locate::Selector;
 use crate::page;
 use crate::take;
+use crate::teach::{TeachSession, TeachState};
 use serde::{Deserialize, Serialize};
 use crate::target::{self, LaunchedTarget};
 use std::sync::Mutex;
@@ -57,7 +58,7 @@ pub fn draft_script(
     initial: State<'_, ScriptInitialState>,
     brief: String,
     setup: State<'_, crate::setup::SetupState>,
-    teach: State<'_, crate::teach::TeachState>,
+    teach: State<'_, TeachState>,
 ) -> Result<Scenario, String> {
     setup.ensure_idle()?;
     teach.ensure_idle()?;
@@ -80,6 +81,48 @@ pub fn draft_script(
     Ok(scenario)
 }
 
+/// A script narrating a taught walkthrough, and each scene's starting state: the page just before
+/// its first taught click, or the page as teaching ended for a scene after the last click.
+pub(crate) fn draft_from_session(
+    provider: &impl AiProvider, session: &TeachSession, brief: &str,
+) -> Result<(Scenario, Vec<page::InitialState>), String> {
+    let aligned = provider.align_script(&session.steps, brief)?;
+    if aligned.scenario.scenes.is_empty() {
+        return Err("Gemini returned an empty script".into());
+    }
+    let states = aligned
+        .scene_starts
+        .iter()
+        .map(|start| match start {
+            Some(index) => session.steps.get(*index).map(|step| step.before.clone()).ok_or("a scene starts at an unknown step"),
+            None => Ok(session.end.clone()),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((aligned.scenario, states))
+}
+
+/// Asks Gemini to narrate the last taught walkthrough and shares the script with the pill. Each
+/// scene's approved starting state comes from the walkthrough, so recorded scenes and Replay setup
+/// check against the page as it really was at that point.
+#[tauri::command(async)]
+pub fn draft_from_teach(
+    app: AppHandle,
+    script: State<'_, CurrentScript>,
+    initial: State<'_, ScriptInitialState>,
+    setup: State<'_, crate::setup::SetupState>,
+    teach: State<'_, TeachState>,
+    brief: String,
+) -> Result<Scenario, String> {
+    setup.ensure_idle()?;
+    teach.ensure_idle()?;
+    let session = teach.last()?.ok_or("Teach a walkthrough first")?;
+    let (scenario, states) = draft_from_session(&Gemini::from_store()?, &session, brief.trim())?;
+    *initial.0.lock().map_err(err)? = states;
+    *script.0.lock().map_err(err)? = Some(scenario.clone());
+    app.emit("script-changed", &scenario).map_err(err)?;
+    Ok(scenario)
+}
+
 #[tauri::command]
 pub fn current_script(script: State<'_, CurrentScript>) -> Result<Option<Scenario>, String> {
     Ok(script.0.lock().map_err(err)?.clone())
@@ -89,7 +132,7 @@ pub fn current_script(script: State<'_, CurrentScript>) -> Result<Option<Scenari
 #[tauri::command]
 pub fn start_session(
     app: AppHandle, session: State<'_, CurrentSession>, setup: State<'_, crate::setup::SetupState>,
-    teach: State<'_, crate::teach::TeachState>, mode: Mode,
+    teach: State<'_, TeachState>, mode: Mode,
 ) -> Result<Session, String> {
     setup.ensure_idle()?;
     teach.ensure_idle()?;
@@ -127,6 +170,43 @@ pub fn press_action(targets: State<'_, LaunchedTarget>, setup: State<'_, crate::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::teach::TeachStep;
+
+    fn state(heading: &str) -> page::InitialState {
+        page::InitialState { url: "http://localhost/".into(), headings: vec![heading.into()], dialogs: vec![] }
+    }
+
+    fn session(labels: &[&str]) -> TeachSession {
+        TeachSession {
+            start: state("start"),
+            end: state("end"),
+            steps: labels.iter().enumerate().map(|(index, label)| TeachStep {
+                index, at_ms: 0, label: (*label).into(), test_id: None, role: None,
+                before: state(&format!("before {label}")), flags: vec![],
+            }).collect(),
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn scenes_start_where_their_first_taught_click_was() {
+        let provider = ai::Scripted(vec![
+            ("Open", vec![("Start a new recording.", vec![("new", "s0")])]),
+            ("Settings", vec![("Open settings and confirm.", vec![("settings", "s1"), ("confirm", "s2")])]),
+            ("Done", vec![("That's the tour.", vec![])]),
+        ]);
+        let (scenario, states) = draft_from_session(&provider, &session(&["New Recording", "Settings", "Confirm"]), "").unwrap();
+        assert_eq!(scenario.scenes.len(), 3);
+        let headings: Vec<&str> = states.iter().map(|s| s.headings[0].as_str()).collect();
+        assert_eq!(headings, ["before New Recording", "before Settings", "end"]);
+    }
+
+    #[test]
+    fn a_script_that_skips_a_taught_step_is_refused() {
+        let provider = ai::Scripted(vec![("Open", vec![("Start a new recording.", vec![("new", "s0")])])]);
+        let refused = draft_from_session(&provider, &session(&["New Recording", "Settings"]), "").unwrap_err();
+        assert!(refused.contains("isn't narrated"), "{refused}");
+    }
 
     /// Live: needs a stored Gemini key and a CDP page on `SCENRA_TEST_CDP_PORT`.
     /// Run with `cargo test -p scenra gemini -- --ignored --nocapture`.

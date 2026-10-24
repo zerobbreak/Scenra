@@ -470,6 +470,41 @@ mod tests {
         result.unwrap();
     }
 
+    /// Teach → draft → Replay setup: the taught starting states are ones setup can reach and the
+    /// scene-start check accepts.
+    #[test]
+    #[ignore = "launches the demo target window"]
+    fn taught_scene_states_are_reachable_by_replay_setup() {
+        let user_data = std::env::temp_dir().join("scenra-test-teach-replay");
+        let (mut child, port) = crate::target::spawn_demo_target(&user_data).unwrap();
+        let result = (|| -> Result<(), String> {
+            page::wait_until_settled(port, Duration::from_secs(15))?;
+            let (sent, received) = std::sync::mpsc::channel();
+            let recorder = Recorder::start(port, move |_| { let _ = sent.send(()); })?;
+            let next = |what: &str| received.recv_timeout(Duration::from_secs(5)).map_err(|_| format!("the click on {what} wasn't recorded"));
+            press(port, "create-recording")?; next("create-recording")?;
+            press(port, "open-settings")?; next("open-settings")?;
+            std::thread::sleep(Duration::from_millis(300));
+            press(port, "settings-confirm")?; next("settings-confirm")?;
+            let session = recorder.stop()?;
+
+            let provider = crate::ai::Scripted(vec![
+                ("Open", vec![("Let's start a new recording, then open settings.", vec![("new", "s0"), ("settings", "s1")])]),
+                ("Confirm", vec![("Now we confirm our choices.", vec![("confirm", "s2")])]),
+            ]);
+            let (scenario, states) = crate::script::draft_from_session(&provider, &session, "")?;
+            if states[0] != session.start { return Err("scene 1 should start on the page teaching began on".into()); }
+            if states[1].dialogs.is_empty() { return Err("scene 2 should start with the Settings dialog open".into()); }
+            // From a fresh page, setup must replay scene 1's two clicks to reach scene 2.
+            page::restore_url(port, &states[0].url, Duration::from_secs(15), &|| Ok(()))?;
+            let outcome = crate::setup::replay_to_start(port, &scenario, &states, 1, || Ok(()))?;
+            if outcome.actions_run != 2 { return Err(format!("expected 2 replayed clicks, got {}", outcome.actions_run)); }
+            Ok(())
+        })();
+        let _ = child.kill(); let _ = child.wait();
+        result.unwrap();
+    }
+
     #[test]
     fn listener_shares_the_initial_state_function() {
         assert!(listener_js().contains(page::INITIAL_STATE_FN));

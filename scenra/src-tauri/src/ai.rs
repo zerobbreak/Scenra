@@ -54,7 +54,6 @@ pub trait AiProvider {
     fn draft_script(&self, page: &PageOutline, brief: &str) -> Result<Scenario, String>;
     /// Writes narration around a taught walkthrough. Every usable step is clicked exactly once,
     /// in the order it was taught.
-    #[allow(dead_code)] // Called by draft_from_teach (Teach slice, step 4).
     fn align_script(&self, steps: &[TeachStep], brief: &str) -> Result<Aligned, String>;
 }
 
@@ -105,7 +104,6 @@ Pin each click to the word in the line where the viewer should see it happen: \
 provided controls. Only use controls that navigate or reveal content; never sign in, sign up, \
 join a waitlist, buy or submit anything. Use only facts visible in the outline.";
 
-#[allow(dead_code)] // Used by align_script.
 const SYSTEM_ALIGN: &str = "You write narration scripts for screen-recorded software demos. \
 The presenter already clicked through the workflow once; you get those clicks as ordered steps, \
 each with the control's label and the headings and dialogs visible just before it. \
@@ -399,6 +397,42 @@ fn resolve_aligned(draft: Draft, steps: &[TeachStep]) -> Result<Aligned, String>
         })
         .collect();
     Ok(Aligned { scenario: Scenario { title: draft.title, scenes, warnings }, scene_starts })
+}
+
+/// A stand-in provider for tests: replies with a fixed script, checked like Gemini's.
+/// Each scene is `(title, lines)`; each line is `(text, [(trigger, step id)])`.
+#[cfg(test)]
+pub(crate) struct Scripted(pub Vec<(&'static str, Vec<ScriptedLine>)>);
+
+/// `(text, [(trigger, step or control id)])`.
+#[cfg(test)]
+pub(crate) type ScriptedLine = (&'static str, Vec<(&'static str, &'static str)>);
+
+#[cfg(test)]
+impl Scripted {
+    fn draft(&self) -> Draft {
+        Draft {
+            title: "Scripted".into(),
+            scenes: self.0.iter().map(|(title, lines)| DraftScene {
+                title: (*title).into(),
+                lines: lines.iter().map(|(text, actions)| DraftLine {
+                    text: (*text).into(),
+                    actions: actions.iter().map(|(t, s)| DraftAction { trigger: (*t).into(), control: (*s).into() }).collect(),
+                }).collect(),
+            }).collect(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl AiProvider for Scripted {
+    fn draft_script(&self, page: &PageOutline, _brief: &str) -> Result<Scenario, String> {
+        Ok(resolve(self.draft(), &page.controls))
+    }
+
+    fn align_script(&self, steps: &[TeachStep], _brief: &str) -> Result<Aligned, String> {
+        resolve_aligned(self.draft(), steps)
+    }
 }
 
 /// The first few words of a control label, short enough for the pill's action chip.
