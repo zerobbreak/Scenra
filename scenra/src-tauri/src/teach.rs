@@ -571,6 +571,59 @@ mod tests {
         result.unwrap();
     }
 
+    /// Live, Chrome: teaching keeps recording across a cross-site navigation, and when its tab is
+    /// replaced the recorder re-attaches to the new one and says so.
+    #[test]
+    #[ignore = "launches Chrome"]
+    fn chrome_teaching_survives_cross_site_navigation_and_a_replaced_tab() {
+        let server = crate::target::fixture::serve(Duration::ZERO);
+        let site = server.addr.port();
+        let profile = std::env::temp_dir().join(format!("scenra-chrome-teach-{}", crate::take::stamp()));
+        let (mut child, port) = crate::target::spawn_chrome(&format!("http://127.0.0.1:{site}/"), &profile).unwrap();
+        let result = (|| -> Result<(), String> {
+            // A minimised or covered Chrome never paints (T-7).
+            locate::restore_target(child.id())?;
+            page::page_session(port)?.call("Page.bringToFront", json!({}))?;
+            page::wait_until_settled(port, Duration::from_secs(15))?;
+            let (sent, received) = std::sync::mpsc::channel();
+            let recorder = Recorder::start(port, move |step| { let _ = sent.send(step.label.clone()); })?;
+            let next = |what: &str| received.recv_timeout(Duration::from_secs(5)).map_err(|_| format!("the click on {what} wasn't recorded"));
+            press(port, "create-recording")?; next("create-recording")?;
+
+            // 127.0.0.1 and localhost are different sites, so Chrome may swap renderer processes.
+            let cross = format!("http://localhost:{site}/");
+            page::restore_url(port, &cross, Duration::from_secs(15), &|| Ok(()))?;
+            press(port, "open-settings")?; next("open-settings after the cross-site navigation")?;
+
+            // Replace the tab: open a new one, let the recorder notice two tabs, then close the original.
+            let mut original = page::page_session(port)?;
+            let original_id = original.call("Target.getTargetInfo", json!({}))?["targetInfo"]["targetId"]
+                .as_str().ok_or("no target id")?.to_owned();
+            original.call("Target.createTarget", json!({ "url": format!("http://127.0.0.1:{site}/") }))?;
+            std::thread::sleep(POLL * TAB_CHECK_EVERY * 2);
+            original.call("Target.closeTarget", json!({ "targetId": original_id }))?;
+            drop(original);
+            page::page_session(port)?.call("Page.bringToFront", json!({}))?;
+            page::wait_until_settled(port, Duration::from_secs(15))?;
+            // Give the recorder a moment to re-attach before the next click.
+            std::thread::sleep(Duration::from_millis(1500));
+            press(port, "create-recording")?; next("create-recording in the replacement tab")?;
+            let session = recorder.stop()?;
+
+            let labels: Vec<_> = session.steps.iter().map(|s| s.label.as_str()).collect();
+            if labels != ["New Recording", "Settings", "New Recording"] { return Err(format!("steps: {labels:?}")); }
+            if !session.steps[1].before.url.starts_with("http://localhost:") {
+                return Err(format!("Settings should be taught on the localhost page, got {}", session.steps[1].before.url));
+            }
+            if !session.warnings.iter().any(|w| w == REATTACHED) { return Err(format!("no re-attach warning: {:?}", session.warnings)); }
+            if !session.warnings.iter().any(|w| w.contains("second tab")) { return Err(format!("no second-tab warning: {:?}", session.warnings)); }
+            Ok(())
+        })();
+        let _ = child.kill(); let _ = child.wait();
+        drop(server);
+        result.unwrap();
+    }
+
     /// Teach → draft → Replay setup: the taught starting states are ones setup can reach and the
     /// scene-start check accepts.
     #[test]

@@ -155,7 +155,7 @@ fn chrome_exe() -> Result<PathBuf, String> {
     candidates.into_iter().find(|p| p.exists()).ok_or_else(|| "Chrome isn't installed".into())
 }
 
-fn spawn_chrome(url: &str, profile: &Path) -> Result<(Child, u16), String> {
+pub(crate) fn spawn_chrome(url: &str, profile: &Path) -> Result<(Child, u16), String> {
     let exe = chrome_exe()?;
     let port = free_port()?;
     let child = Command::new(&exe)
@@ -407,6 +407,58 @@ fn descends_from(processes: &HashMap<u32, ProcessEntry>, mut pid: u32, ancestor:
     false
 }
 
+/// Serves the Lumina fixture over plain HTTP on loopback, for live tests against Chrome.
+#[cfg(test)]
+pub(crate) mod fixture {
+    use std::io::{Read, Write};
+    use std::net::{Ipv4Addr, SocketAddr, TcpListener};
+    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+    use std::time::Duration;
+
+    /// Stops serving when dropped.
+    pub(crate) struct Server {
+        pub addr: SocketAddr,
+        stopping: Arc<AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    /// `page_delay` holds back every page response, to test against a slow network.
+    pub(crate) fn serve(page_delay: Duration) -> Server {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stopping = Arc::new(AtomicBool::new(false));
+        let stopped = stopping.clone();
+        let thread = std::thread::spawn(move || {
+            for connection in listener.incoming() {
+                if stopped.load(Ordering::SeqCst) { break; }
+                let Ok(mut stream) = connection else { break };
+                let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
+                let mut request = [0u8; 4096];
+                let Ok(n) = stream.read(&mut request) else { continue };
+                if n == 0 { continue; }
+                let request = String::from_utf8_lossy(&request[..n]);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let (content, kind) = match path {
+                    "/main.js" => (include_str!("../../../fixtures/demo-target/src/main.js"), "text/javascript"),
+                    "/styles.css" => (include_str!("../../../fixtures/demo-target/src/styles.css"), "text/css"),
+                    _ => { std::thread::sleep(page_delay); (include_str!("../../../fixtures/demo-target/src/index.html"), "text/html") }
+                };
+                let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{content}", content.len());
+            }
+        });
+        Server { addr, stopping, thread: Some(thread) }
+    }
+
+    impl Drop for Server {
+        fn drop(&mut self) {
+            self.stopping.store(true, Ordering::SeqCst);
+            // Wake the accept loop so it sees the flag.
+            let _ = std::net::TcpStream::connect(self.addr);
+            if let Some(thread) = self.thread.take() { let _ = thread.join(); }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -594,31 +646,9 @@ mod tests {
     #[test]
     #[ignore = "launches Chrome and moves the real pointer"]
     fn chrome_preflight_then_first_click() {
-        use std::io::{Read, Write};
-        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
         use windows::Win32::UI::HiDpi::{SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let addr = listener.local_addr().unwrap();
-        let stopping = Arc::new(AtomicBool::new(false));
-        let stopped = stopping.clone();
-        let server = std::thread::spawn(move || {
-            for connection in listener.incoming() {
-                if stopped.load(Ordering::SeqCst) { break; }
-                let Ok(mut stream) = connection else { break };
-                let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
-                let mut request = [0u8; 4096];
-                let Ok(n) = stream.read(&mut request) else { continue };
-                if n == 0 { continue; }
-                let request = String::from_utf8_lossy(&request[..n]);
-                let path = request.split_whitespace().nth(1).unwrap_or("/");
-                let (content, kind) = match path {
-                    "/main.js" => (include_str!("../../../fixtures/demo-target/src/main.js"), "text/javascript"),
-                    "/styles.css" => (include_str!("../../../fixtures/demo-target/src/styles.css"), "text/css"),
-                    _ => { std::thread::sleep(Duration::from_millis(700)); (include_str!("../../../fixtures/demo-target/src/index.html"), "text/html") }
-                };
-                let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{content}", content.len());
-            }
-        });
+        let server = fixture::serve(Duration::from_millis(700));
+        let addr = server.addr;
         let previous_dpi = unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
         let profile = std::env::temp_dir().join(format!("scenra-chrome-preflight-{}", crate::take::stamp()));
         let spawned = spawn_chrome(&format!("http://{addr}/"), &profile);
@@ -673,9 +703,7 @@ mod tests {
             Err(e) => Err(e),
         };
         unsafe { SetThreadDpiAwarenessContext(previous_dpi); }
-        stopping.store(true, Ordering::SeqCst);
-        let _ = std::net::TcpStream::connect(addr);
-        let _ = server.join();
+        drop(server);
         result.unwrap();
     }
 
