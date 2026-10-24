@@ -16,10 +16,11 @@ use crate::{hooks, locate, setup, take, target};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 const BINDING: &str = "__scenraTeach";
 const POLL: Duration = Duration::from_millis(200);
@@ -317,11 +318,58 @@ impl Recorder {
     }
 }
 
+/// Each finished walkthrough is saved as `<app local data>/teach/<UTC stamp>/session.json`, so a
+/// restart doesn't lose it. The newest one that reads cleanly is loaded on launch.
+const SESSION_FILE: &str = "session.json";
+
+/// Saves a new walkthrough in its own folder under `dir` and returns the file.
+fn save_new(dir: &Path, session: &TeachSession) -> Result<PathBuf, String> {
+    let stamp = take::stamp();
+    let mut folder = dir.join(&stamp);
+    // Two walkthroughs finished in the same second get separate folders.
+    let mut n = 2;
+    while folder.exists() {
+        folder = dir.join(format!("{stamp}-{n}"));
+        n += 1;
+    }
+    std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+    let file = folder.join(SESSION_FILE);
+    overwrite(&file, session)?;
+    Ok(file)
+}
+
+/// Replaces a saved walkthrough. Writes a temporary file first, so a crash mid-write leaves the
+/// previous version intact.
+fn overwrite(file: &Path, session: &TeachSession) -> Result<(), String> {
+    let json = serde_json::to_vec_pretty(session).map_err(|e| e.to_string())?;
+    let partial = file.with_extension("json.partial");
+    std::fs::write(&partial, json).map_err(|e| e.to_string())?;
+    std::fs::rename(&partial, file).map_err(|e| e.to_string())
+}
+
+/// The newest saved walkthrough that reads cleanly. Unreadable or outdated files are skipped.
+fn load_latest(dir: &Path) -> Option<(PathBuf, TeachSession)> {
+    let mut folders: Vec<PathBuf> = std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+    // Stamps sort by time; a same-second "-n" folder sorts after the first one.
+    folders.sort();
+    folders.into_iter().rev().find_map(|folder| {
+        let file = folder.join(SESSION_FILE);
+        let session = serde_json::from_slice(&std::fs::read(&file).ok()?).ok()?;
+        Some((file, session))
+    })
+}
+
+/// The last finished walkthrough and where it is saved (`None` if saving failed).
+struct Saved {
+    session: TeachSession,
+    file: Option<PathBuf>,
+}
+
 /// The walkthrough being taught, and the last one finished.
 #[derive(Default)]
 pub struct TeachState {
     active: Mutex<Option<Recorder>>,
-    last: Mutex<Option<TeachSession>>,
+    last: Mutex<Option<Saved>>,
 }
 
 impl TeachState {
@@ -334,8 +382,22 @@ impl TeachState {
     }
 
     pub(crate) fn last(&self) -> Result<Option<TeachSession>, String> {
-        Ok(self.last.lock().map_err(|e| e.to_string())?.clone())
+        Ok(self.last.lock().map_err(|e| e.to_string())?.as_ref().map(|saved| saved.session.clone()))
     }
+
+    /// Loads the newest saved walkthrough, at launch.
+    pub(crate) fn restore(&self, app: &AppHandle) {
+        if let Ok(dir) = teach_dir(app)
+            && let Some((file, session)) = load_latest(&dir)
+            && let Ok(mut last) = self.last.lock()
+        {
+            *last = Some(Saved { session, file: Some(file) });
+        }
+    }
+}
+
+fn teach_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app.path().app_local_data_dir().map_err(|e| e.to_string())?.join("teach"))
 }
 
 /// Starts recording the presenter's clicks in the running target. Each click is emitted as
@@ -359,10 +421,18 @@ pub fn start_teach(
 
 /// Stops teaching and returns the walkthrough, which becomes the last taught session.
 #[tauri::command(async)]
-pub fn stop_teach(teach: State<'_, TeachState>) -> Result<TeachSession, String> {
+pub fn stop_teach(app: AppHandle, teach: State<'_, TeachState>) -> Result<TeachSession, String> {
     let recorder = teach.active.lock().map_err(|e| e.to_string())?.take().ok_or("Teaching isn't running")?;
-    let session = recorder.stop()?;
-    *teach.last.lock().map_err(|e| e.to_string())? = Some(session.clone());
+    let mut session = recorder.stop()?;
+    // Keep the walkthrough in memory even if it can't be saved, and say so.
+    let file = match teach_dir(&app).and_then(|dir| save_new(&dir, &session)) {
+        Ok(file) => Some(file),
+        Err(e) => {
+            session.warnings.push(format!("couldn't save the walkthrough, so it will be lost on restart: {e}"));
+            None
+        }
+    };
+    *teach.last.lock().map_err(|e| e.to_string())? = Some(Saved { session: session.clone(), file });
     Ok(session)
 }
 
@@ -385,9 +455,12 @@ pub fn teach_state(teach: State<'_, TeachState>) -> Result<TeachStatus, String> 
 pub fn delete_teach_step(teach: State<'_, TeachState>, index: usize) -> Result<TeachSession, String> {
     teach.ensure_idle()?;
     let mut last = teach.last.lock().map_err(|e| e.to_string())?;
-    let session = last.as_mut().ok_or("Teach a walkthrough first")?;
-    remove_step(session, index)?;
-    Ok(session.clone())
+    let saved = last.as_mut().ok_or("Teach a walkthrough first")?;
+    remove_step(&mut saved.session, index)?;
+    if let Some(file) = &saved.file {
+        overwrite(file, &saved.session).map_err(|e| format!("deleted the step, but couldn't save the change: {e}"))?;
+    }
+    Ok(saved.session.clone())
 }
 
 fn remove_step(session: &mut TeachSession, index: usize) -> Result<(), String> {
@@ -546,6 +619,35 @@ mod tests {
         remove_step(&mut session, 1).unwrap();
         assert_eq!(session.steps.iter().map(|s| (s.index, s.label.as_str())).collect::<Vec<_>>(), [(0, "New Recording"), (1, "Settings")]);
         assert!(remove_step(&mut session, 2).is_err());
+    }
+
+    fn saved_session(label: &str) -> TeachSession {
+        TeachSession {
+            start: state("http://localhost/"), end: state("http://localhost/"), warnings: vec![],
+            steps: finish(vec![step_from(raw(100.0, "control", label, true), 0.0)]),
+        }
+    }
+
+    #[test]
+    fn saved_walkthroughs_load_newest_first_and_survive_edits() {
+        let dir = std::env::temp_dir().join(format!("scenra-teach-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(load_latest(&dir).is_none(), "a missing folder means nothing saved yet");
+        let first = save_new(&dir, &saved_session("New Recording")).unwrap();
+        let second = save_new(&dir, &saved_session("Settings")).unwrap();
+        assert_ne!(first.parent(), second.parent(), "same-second saves get separate folders");
+        let (file, loaded) = load_latest(&dir).unwrap();
+        assert_eq!((file.as_path(), loaded.steps[0].label.as_str()), (second.as_path(), "Settings"));
+        // An edit replaces the file in place and leaves no partial file behind.
+        overwrite(&second, &saved_session("Confirm")).unwrap();
+        assert_eq!(load_latest(&dir).unwrap().1.steps[0].label, "Confirm");
+        assert!(!second.with_extension("json.partial").exists());
+        // A newer but unreadable walkthrough is skipped, not fatal.
+        let broken = dir.join("99991231-235959");
+        std::fs::create_dir_all(&broken).unwrap();
+        std::fs::write(broken.join(SESSION_FILE), b"{ not json").unwrap();
+        assert_eq!(load_latest(&dir).unwrap().1.steps[0].label, "Confirm");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

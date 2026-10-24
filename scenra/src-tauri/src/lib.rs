@@ -35,6 +35,8 @@ pub fn run() {
                     let _ = handle.emit("emergency-stop", ());
                 });
             })?;
+            use tauri::Manager;
+            app.state::<teach::TeachState>().restore(app.handle());
             Ok(())
         })
         .manage(target::LaunchedTarget::default())
