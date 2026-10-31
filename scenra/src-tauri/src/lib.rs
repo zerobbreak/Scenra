@@ -2,18 +2,18 @@ mod ai;
 mod capture;
 mod cdp;
 mod display;
-mod encoding;
+mod editor;
 mod engine;
 mod hooks;
 mod input;
 mod locate;
 mod matrix;
-mod mkv;
-mod obs;
 mod page;
+mod recorder;
 mod ripple;
 mod script;
 mod secrets;
+mod session;
 mod settings;
 mod setup;
 mod take;
@@ -46,6 +46,7 @@ pub fn run() {
         .manage(take::CurrentTake::default())
         .manage(setup::SetupState::default())
         .manage(teach::TeachState::default())
+        .manage(editor::ExportState::default())
         .invoke_handler(tauri::generate_handler![
             capture::open_teleprompter,
             capture::resize_teleprompter,
@@ -56,6 +57,7 @@ pub fn run() {
             matrix::run_capture_matrix,
             display::display_info,
             display::set_overlay_zoom,
+            display::set_capture_monitor,
             target::launch_target,
             target::launch_chrome,
             target::target_profile,
@@ -83,11 +85,23 @@ pub fn run() {
             hooks::playback_guard,
             engine::clear_stop,
             engine::guard_key,
-            take::obs_status,
             take::take_preflight,
+            take::recorder_status,
             take::start_take,
             take::stop_take,
-            take::restore_obs_profile,
+            editor::open_editor,
+            editor::list_sessions,
+            editor::load_session,
+            editor::save_edit,
+            editor::tidy_session,
+            editor::assemble_session,
+            editor::editor_ai_status,
+            editor::set_transcription,
+            editor::export_session,
+            editor::cancel_export,
+            editor::reveal_in_explorer,
+            editor::retake_scene,
+            editor::describe_session,
             teach::start_teach,
             teach::stop_teach,
             teach::teach_state,

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import Button from "./Button";
-import { DisplayInfo, displayInfo, setOverlayZoom } from "./display";
+import { DisplayInfo, displayInfo, setCaptureMonitor, setOverlayZoom } from "./display";
 import { Probe, probeElement } from "./engine";
 
 const NEW_RECORDING = { testId: "create-recording" };
@@ -55,6 +55,34 @@ export default function DisplayPanel() {
             </li>
           ))}
         </ul>
+      )}
+
+      {info && (
+        <div className="space-y-2 rounded-lg bg-zinc-900 p-4 text-sm">
+          <label className="flex items-center gap-3">
+            <span className="w-28 text-zinc-400">Record</span>
+            <select
+              disabled={busy}
+              className="flex-1 rounded-md bg-zinc-800 p-2"
+              value={info.captureMonitor ?? ""}
+              onChange={(e) => run(() => setCaptureMonitor(e.target.value || null), show)}
+            >
+              <option value="">Primary monitor</option>
+              {info.monitors
+                .filter((m) => m.name)
+                .map((m) => (
+                  <option key={m.name} value={m.name!}>
+                    {m.name} · {m.rect[2]}×{m.rect[3]}
+                    {m.primary ? " (primary)" : ""}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <p className="text-xs text-zinc-500">
+            Takes record this whole monitor, so you can move between apps (editor, terminal,
+            browser) in one scene. The prompter and control bar are left out of the video.
+          </p>
+        </div>
       )}
 
       {info && (

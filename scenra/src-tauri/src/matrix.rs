@@ -1,38 +1,31 @@
-//! Phase 0 · Step 1, automated: the capture-exclusion matrix in docs/phase0/01-capture-exclusion.md.
+//! Phase 0 · Step 1, automated: the capture-exclusion matrix in docs/phase0/01-capture-exclusion.md,
+//! run against Scenra's built-in recorder.
 //!
-//! For each row Scenra switches OBS's Display Capture method, opens the pill over the demo target
-//! (excluded or visible), records a take while clicking New Recording → Settings → Confirm, and
-//! grabs OBS's program output at each step. Each grab is checked for the pill's magenta marker
-//! inside the pill's rect, and saved as a PNG next to the take so a person can confirm the cursor,
-//! ripple and dialog are there.
+//! For each row Scenra opens the pill over the demo target (excluded or visible), records a take
+//! while clicking New Recording → Settings → Confirm, and grabs the recorder's own frames at each
+//! step. Each frame is checked for the pill's magenta marker inside the pill's rect, and saved as a
+//! PNG next to the take so a person can confirm the cursor, ripple and dialog are there.
 //!
-//! It runs at whatever display scaling Windows is set to, and with any OBS canvas: the pill's
-//! screen rect is mapped onto the canvas through the Display Capture source's transform.
+//! The recorder captures one monitor at its physical size, so the pill's screen rect maps onto the
+//! frame by subtracting the monitor's origin.
 
 use crate::capture::{self, TELEPROMPTER};
 use crate::engine;
-use crate::input::Pace;
+use crate::input::{self, Pace};
 use crate::locate::{self, Selector};
-use crate::obs::Obs;
 use crate::page;
+use crate::recorder::Snapshot;
 use crate::take;
 use crate::target::{self, LaunchedTarget};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as B64;
 use serde::Serialize;
-use serde_json::{Value, json};
 use std::path::Path;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, PhysicalPosition, State};
 
-const DISPLAY_CAPTURE: &str = "monitor_capture";
-/// OBS's `method` values for Display Capture.
-const DXGI: u64 = 1;
-const WGC: u64 = 2;
-/// OBS restarts the capture when the method changes; give it time to deliver frames again.
-const METHOD_SETTLE: Duration = Duration::from_millis(2500);
 /// Gap between the pill and the button below it, physical px.
 const PILL_GAP: i32 = 16;
+/// WGC only delivers a frame when the screen changes; the shot nudges the cursor to make one.
+const SHOT_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy)]
 enum Pill {
@@ -44,15 +37,13 @@ enum Pill {
 
 struct Row {
     name: &'static str,
-    method: u64,
     pill: Pill,
 }
 
-const ROWS: [Row; 4] = [
-    Row { name: "wgc-visible", method: WGC, pill: Pill::Visible },
-    Row { name: "wgc-excluded", method: WGC, pill: Pill::Excluded },
-    Row { name: "dxgi-excluded", method: DXGI, pill: Pill::Excluded },
-    Row { name: "wgc-toggled", method: WGC, pill: Pill::Toggled },
+const ROWS: [Row; 3] = [
+    Row { name: "wgc-visible", pill: Pill::Visible },
+    Row { name: "wgc-excluded", pill: Pill::Excluded },
+    Row { name: "wgc-toggled", pill: Pill::Toggled },
 ];
 
 #[derive(Serialize)]
@@ -84,168 +75,76 @@ fn err(e: impl std::fmt::Display) -> String {
 
 #[tauri::command(async)]
 pub fn run_capture_matrix(app: AppHandle, monitor_index: Option<usize>) -> Result<Vec<RowResult>, String> {
-    let mut obs = Obs::connect()?;
-    if obs.request("GetRecordStatus", json!({}))?["outputActive"] == true {
+    if app.state::<take::CurrentTake>().is_recording() {
         return Err("Stop the current recording before running display validation".into());
     }
-    let source = display_capture(&mut obs)?.name;
-    let original = obs.request("GetInputSettings", json!({ "inputName": source }))?["inputSettings"].clone();
     let outcome = (|| -> Result<Vec<RowResult>, String> {
         let _placement = if let Some(index) = monitor_index {
             let monitors = app.available_monitors().map_err(err)?;
             let monitor = monitors.get(index).ok_or("Selected monitor is no longer available")?;
-            let name = monitor.name().ok_or("The selected monitor has no Windows device name")?;
-            let id = crate::display::monitor_capture_id(name)?;
             let (pid, _) = target::running(&app.state::<LaunchedTarget>())?;
             let area = monitor.work_area();
-            let placement = locate::place_on_monitor(pid, (area.position.x, area.position.y, area.size.width, area.size.height))?;
-            obs.request("SetInputSettings", json!({ "inputName": source, "inputSettings": { "monitor_id": id } }))?;
-            std::thread::sleep(METHOD_SETTLE);
-            Some(placement)
+            Some(locate::place_on_monitor(pid, (area.position.x, area.position.y, area.size.width, area.size.height))?)
         } else { None };
-        let capture = display_capture(&mut obs)?;
-        let mut results = Vec::new();
-        for row in &ROWS { results.push(run_row(&app, &mut obs, &capture, row)?); }
-        Ok(results)
+        ROWS.iter().map(|row| run_row(&app, row)).collect()
     })();
-    // Restore the exact input settings and target placement even after a failed row.
     let _ = capture::close_teleprompter(app.clone());
-    let _ = take::stop_take(app.state(), None);
-    let restored = obs.request("SetInputSettings", json!({ "inputName": source, "inputSettings": original, "overlay": false }));
-    match (outcome, restored) {
-        (Ok(results), Ok(_)) => Ok(results),
-        (Err(e), Ok(_)) => Err(e),
-        (result, Err(e)) => Err(format!("{}; could not restore OBS Display Capture: {e}", result.err().unwrap_or_default())),
-    }
+    let _ = take::stop(&app.state());
+    outcome
 }
 
-/// The Display Capture source in the program scene, and where it sits on the OBS canvas.
-struct DisplayCapture {
-    name: String,
-    monitor_id: String,
-    /// Canvas px of the captured monitor's top-left corner (after crop).
-    position: (f64, f64),
-    scale: (f64, f64),
-    crop: (f64, f64),
-    /// The captured monitor's size in physical px.
-    source_size: (f64, f64),
-}
-
-impl DisplayCapture {
-    /// Physical px on the captured monitor (relative to its top-left) → canvas px.
-    fn to_canvas(&self, x: f64, y: f64) -> (f64, f64) {
-        (
-            self.position.0 + (x - self.crop.0) * self.scale.0,
-            self.position.1 + (y - self.crop.1) * self.scale.1,
-        )
-    }
-}
-
-/// OBS's alignment value for "top left", the default for a new source.
-const ALIGN_TOP_LEFT: u64 = 5;
-
-fn display_capture(obs: &mut Obs) -> Result<DisplayCapture, String> {
-    let scene = obs.request("GetCurrentProgramScene", json!({}))?["currentProgramSceneName"].clone();
-    let items = obs.request("GetSceneItemList", json!({ "sceneName": scene }))?;
-    let item = items["sceneItems"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|item| item["inputKind"] == DISPLAY_CAPTURE)
-        .ok_or("the OBS program scene has no Display Capture source")?;
-    let name = item["sourceName"].as_str().unwrap_or_default().to_owned();
-    let t = obs.request("GetSceneItemTransform", json!({ "sceneName": scene, "sceneItemId": item["sceneItemId"] }))?;
-    let t = &t["sceneItemTransform"];
-    let f = |key: &str| t[key].as_f64().unwrap_or(0.0);
-    if t["alignment"].as_u64() != Some(ALIGN_TOP_LEFT) || f("rotation") != 0.0 || t["boundsType"] != "OBS_BOUNDS_NONE" {
-        return Err(format!(
-            "set “{name}” in OBS to top-left alignment, no rotation and no bounding box \
-             (right-click › Transform › Reset Transform), so Scenra can find the pill in the frame"
-        ));
-    }
-    let settings = obs.request("GetInputSettings", json!({ "inputName": name }))?;
-    Ok(DisplayCapture {
-        monitor_id: settings["inputSettings"]["monitor_id"].as_str().unwrap_or_default().to_owned(),
-        name,
-        position: (f("positionX"), f("positionY")),
-        scale: (f("scaleX"), f("scaleY")),
-        crop: (f("cropLeft"), f("cropTop")),
-        source_size: (f("sourceWidth"), f("sourceHeight")),
-    })
-}
-
-fn run_row(app: &AppHandle, obs: &mut Obs, capture: &DisplayCapture, row: &Row) -> Result<RowResult, String> {
+fn run_row(app: &AppHandle, row: &Row) -> Result<RowResult, String> {
     let targets: State<'_, LaunchedTarget> = app.state();
-    obs.request("SetInputSettings", json!({ "inputName": capture.name, "inputSettings": { "method": row.method } }))?;
-    std::thread::sleep(METHOD_SETTLE);
-
     let excluded = !matches!(row.pill, Pill::Visible);
     capture::open_teleprompter(app.clone(), excluded)?;
     let pill = app.get_webview_window(TELEPROMPTER).ok_or("the teleprompter didn't open")?;
     place_over_target(&pill, &targets)?;
     let scale = pill.scale_factor().map_err(err)?;
     let monitor = pill.current_monitor().map_err(err)?.ok_or("the pill isn't on a monitor")?;
-    let id = crate::display::monitor_capture_id(monitor.name().ok_or("Monitor name unavailable")?)?;
-    if !capture.monitor_id.eq_ignore_ascii_case(&id) {
-        return Err("OBS Display Capture is pointed at a different monitor; select the target monitor in the matrix controls".into());
-    }
-    let size = monitor.size();
-    if (f64::from(size.width), f64::from(size.height)) != capture.source_size {
-        return Err(format!(
-            "OBS's “{}” captures a {}×{} display, but the pill and target are on a {}×{} one: \
-             point Display Capture at the monitor the target is on",
-            capture.name, capture.source_size.0, capture.source_size.1, size.width, size.height
-        ));
-    }
-    let monitor_origin = (f64::from(monitor.position().x), f64::from(monitor.position().y));
+    let device = monitor.name().ok_or("Monitor name unavailable")?.clone();
+    let origin = (monitor.position().x, monitor.position().y);
     std::thread::sleep(Duration::from_millis(800));
 
-    let take_dir = take::start_take(app.state(), app.state(), None)?;
+    // Record the monitor the pill and target are on, whatever Setup › Display says.
+    let take_dir = take::start_take_on(&app.state(), &targets, &crate::session::root(app), None, Some(&device))?;
     let dir = Path::new(&take_dir);
     let mut shots = Vec::new();
-    let mut shoot = |obs: &mut Obs, label: &str, expect_pill: bool| -> Result<(), String> {
-        shots.push(shot(obs, &pill, capture, monitor_origin, dir, label, expect_pill)?);
+    let mut shoot = |label: &str, expect_pill: bool| -> Result<(), String> {
+        shots.push(shot(app, &pill, origin, dir, label, expect_pill)?);
         Ok(())
     };
 
-    shoot(obs, "1-pill-over-target", !excluded)?;
+    shoot("1-pill-over-target", !excluded)?;
     if let Pill::Toggled = row.pill {
         capture::set_capture_excluded(app.clone(), false)?;
         std::thread::sleep(Duration::from_millis(500));
-        shoot(obs, "2-toggled-visible", true)?;
+        shoot("2-toggled-visible", true)?;
     }
     let visible_now = !matches!(row.pill, Pill::Excluded);
     engine::click(&targets, &Selector::TestId("create-recording".into()), Pace::Natural)?;
     std::thread::sleep(Duration::from_millis(400));
     engine::click(&targets, &Selector::TestId("open-settings".into()), Pace::Natural)?;
     std::thread::sleep(Duration::from_millis(500));
-    shoot(obs, "3-settings-dialog", visible_now)?;
+    shoot("3-settings-dialog", visible_now)?;
     engine::click(&targets, &Selector::TestId("settings-confirm".into()), Pace::Natural)?;
     std::thread::sleep(Duration::from_millis(400));
     // Cross the pill with the cursor: it must be captured even where the pill is hidden.
     let position = pill.outer_position().map_err(err)?;
     let size = pill.outer_size().map_err(err)?;
-    crate::input::move_to(
+    input::move_to(
         f64::from(position.x) + f64::from(size.width) * 0.6,
         f64::from(position.y) + f64::from(size.height) / 2.0,
         Pace::Natural,
     )
     .map_err(err)?;
     std::thread::sleep(Duration::from_millis(300));
-    shoot(obs, "4-cursor-over-pill", visible_now)?;
+    shoot("4-cursor-over-pill", visible_now)?;
 
-    take::stop_take(app.state(), None)?;
+    take::stop(&app.state())?;
     close_overlays(app)?;
 
     let passed = shots.iter().all(|s| s.pill_seen == s.expect_pill);
-    Ok(RowResult {
-        name: row.name,
-        method: if row.method == DXGI { "DXGI" } else { "WGC" },
-        scale,
-        take: take_dir,
-        shots,
-        passed,
-    })
+    Ok(RowResult { name: row.name, method: "WGC", scale, take: take_dir, shots, passed })
 }
 
 /// Closes the pill and bar and waits until they are gone: `destroy` is asynchronous, and opening
@@ -281,44 +180,60 @@ fn place_over_target(pill: &tauri::WebviewWindow, targets: &LaunchedTarget) -> R
     pill.set_position(PhysicalPosition::new(x, y)).map_err(err)
 }
 
-/// Grabs OBS's program output, saves it as PNG, and counts marker pixels inside the pill's rect,
-/// mapped from the screen onto the canvas.
+/// A screen rect (physical px) → the frame's pixel range, clamped to the frame.
+/// Returns (x0, x1, y0, y1).
+fn to_frame(rect: (i32, i32, u32, u32), origin: (i32, i32), frame: (u32, u32)) -> (u32, u32, u32, u32) {
+    let clamp = |v: i64, max: u32| v.clamp(0, i64::from(max)) as u32;
+    let (left, top) = (i64::from(rect.0 - origin.0), i64::from(rect.1 - origin.1));
+    (
+        clamp(left, frame.0),
+        clamp(left + i64::from(rect.2), frame.0),
+        clamp(top, frame.1),
+        clamp(top + i64::from(rect.3), frame.1),
+    )
+}
+
+fn count_marker(frame: &Snapshot, (x0, x1, y0, y1): (u32, u32, u32, u32)) -> usize {
+    let mut marker = 0;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let (r, g, b) = frame.pixel(x, y);
+            marker += usize::from(capture::is_marker(r, g, b));
+        }
+    }
+    marker
+}
+
+/// Grabs the recorder's next frame, saves it as PNG, and counts marker pixels inside the pill's rect.
 fn shot(
-    obs: &mut Obs,
+    app: &AppHandle,
     pill: &tauri::WebviewWindow,
-    capture: &DisplayCapture,
-    monitor_origin: (f64, f64),
+    origin: (i32, i32),
     dir: &Path,
     label: &str,
     expect_pill: bool,
 ) -> Result<Shot, String> {
-    let scene = obs.request("GetCurrentProgramScene", json!({}))?["currentProgramSceneName"].clone();
-    let png = screenshot(obs, &scene, "png")?;
+    // Nudge the cursor so Windows has a changed screen to deliver.
+    let nudge = std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_millis(100));
+        let (x, y) = input::cursor();
+        let _ = input::move_to(f64::from(x) + 3.0, f64::from(y), Pace::Fast);
+        let _ = input::move_to(f64::from(x), f64::from(y), Pace::Fast);
+    });
+    let grabbed = take::snapshot(&app.state(), SHOT_TIMEOUT);
+    let _ = nudge.join();
+    let (frame, _) = grabbed?;
     let png_path = dir.join(format!("{label}.png"));
-    std::fs::write(&png_path, png).map_err(err)?;
+    std::fs::write(&png_path, frame.png()?).map_err(err)?;
 
-    let raw = screenshot(obs, &scene, "bmp")?;
-    let bmp = Bmp::parse(&raw)?;
     let position = pill.outer_position().map_err(err)?;
     let size = pill.outer_size().map_err(err)?;
-    let left = f64::from(position.x) - monitor_origin.0;
-    let top = f64::from(position.y) - monitor_origin.1;
-    let (x0, y0) = capture.to_canvas(left, top);
-    let (x1, y1) = capture.to_canvas(left + f64::from(size.width), top + f64::from(size.height));
-    let clamp_x = |v: f64| (v.round().max(0.0) as usize).min(bmp.width);
-    let clamp_y = |v: f64| (v.round().max(0.0) as usize).min(bmp.height);
-    let (x0, x1, y0, y1) = (clamp_x(x0), clamp_x(x1), clamp_y(y0), clamp_y(y1));
-    let mut marker_pixels = 0;
-    for y in y0..y1 {
-        for x in x0..x1 {
-            let (r, g, b) = bmp.pixel(x, y);
-            marker_pixels += usize::from(capture::is_marker(r, g, b));
-        }
-    }
-    let pill_pixels = (x1 - x0) * (y1 - y0);
+    let range = to_frame((position.x, position.y, size.width, size.height), origin, (frame.width, frame.height));
+    let pill_pixels = ((range.1 - range.0) * (range.3 - range.2)) as usize;
     if pill_pixels == 0 {
-        return Err("the pill is outside OBS's canvas: is Display Capture cropped or moved off-screen?".into());
+        return Err("the pill is outside the recorded monitor".into());
     }
+    let marker_pixels = count_marker(&frame, range);
     Ok(Shot {
         label: label.into(),
         expect_pill,
@@ -330,97 +245,27 @@ fn shot(
     })
 }
 
-fn screenshot(obs: &mut Obs, scene: &Value, format: &str) -> Result<Vec<u8>, String> {
-    let reply = obs.request("GetSourceScreenshot", json!({ "sourceName": scene, "imageFormat": format }))?;
-    let data = reply["imageData"].as_str().ok_or("OBS returned no screenshot")?;
-    let base64 = data.split_once(',').map_or(data, |(_, b)| b);
-    B64.decode(base64).map_err(err)
-}
-
-/// An uncompressed 24- or 32-bit BMP, as OBS (Qt) writes it.
-struct Bmp<'a> {
-    data: &'a [u8],
-    width: usize,
-    height: usize,
-    top_down: bool,
-    bytes_per_pixel: usize,
-    stride: usize,
-}
-
-impl<'a> Bmp<'a> {
-    fn parse(data: &'a [u8]) -> Result<Self, String> {
-        let u32_at = |i: usize| data.get(i..i + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
-        if data.get(..2) != Some(b"BM") {
-            return Err("OBS screenshot isn't a BMP".into());
-        }
-        let offset = u32_at(10).ok_or("truncated BMP")? as usize;
-        let width = u32_at(18).ok_or("truncated BMP")? as i32;
-        let height = u32_at(22).ok_or("truncated BMP")? as i32;
-        let bits = data.get(28).copied().ok_or("truncated BMP")?;
-        if bits != 24 && bits != 32 {
-            return Err(format!("unsupported BMP depth: {bits} bits"));
-        }
-        let bytes_per_pixel = usize::from(bits / 8);
-        let width = width.unsigned_abs() as usize;
-        let stride = (width * bytes_per_pixel).div_ceil(4) * 4;
-        let bmp = Self {
-            data: data.get(offset..).ok_or("truncated BMP")?,
-            width,
-            height: height.unsigned_abs() as usize,
-            top_down: height < 0,
-            bytes_per_pixel,
-            stride,
-        };
-        if bmp.data.len() < bmp.stride * bmp.height {
-            return Err("truncated BMP".into());
-        }
-        Ok(bmp)
-    }
-
-    fn pixel(&self, x: usize, y: usize) -> (u8, u8, u8) {
-        let row = if self.top_down { y } else { self.height - 1 - y };
-        let i = row * self.stride + x * self.bytes_per_pixel;
-        (self.data[i + 2], self.data[i + 1], self.data[i])
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn capture(position: (f64, f64), scale: (f64, f64), crop: (f64, f64)) -> DisplayCapture {
-        DisplayCapture { name: "Display Capture".into(), monitor_id: String::new(), position, scale, crop, source_size: (3840.0, 2160.0) }
+    #[test]
+    fn pill_rect_maps_onto_a_secondary_monitor_frame() {
+        // Monitor at x = -1920 (left of primary); pill at screen (-1000, 100).
+        assert_eq!(to_frame((-1000, 100, 840, 112), (-1920, 0), (1920, 1080)), (920, 1760, 100, 212));
     }
 
     #[test]
-    fn screen_px_map_onto_a_downscaled_canvas() {
-        // A 4K monitor shown at half size on a 1080p canvas.
-        let c = capture((0.0, 0.0), (0.5, 0.5), (0.0, 0.0));
-        assert_eq!(c.to_canvas(1000.0, 400.0), (500.0, 200.0));
+    fn pill_rect_is_clamped_to_the_frame() {
+        assert_eq!(to_frame((1500, -20, 840, 112), (0, 0), (1920, 1080)), (1500, 1920, 0, 92));
+        assert_eq!(to_frame((3000, 0, 100, 100), (0, 0), (1920, 1080)), (1920, 1920, 0, 100));
     }
 
     #[test]
-    fn screen_px_map_through_position_and_crop() {
-        let c = capture((100.0, 50.0), (1.0, 1.0), (20.0, 10.0));
-        assert_eq!(c.to_canvas(20.0, 10.0), (100.0, 50.0));
-        assert_eq!(c.to_canvas(220.0, 110.0), (300.0, 150.0));
-    }
-
-    #[test]
-    fn bmp_reads_bottom_up_24_bit_rows() {
-        // 2×2, bottom-up: the first stored row is the bottom one. Rows pad to 8 bytes.
-        let mut data = vec![0u8; 54];
-        data[..2].copy_from_slice(b"BM");
-        data[10..14].copy_from_slice(&54u32.to_le_bytes());
-        data[18..22].copy_from_slice(&2i32.to_le_bytes());
-        data[22..26].copy_from_slice(&2i32.to_le_bytes());
-        data[28] = 24;
-        data.extend_from_slice(&[0, 0, 255, 0, 255, 0, 0, 0]); // bottom: red, green
-        data.extend_from_slice(&[255, 0, 0, 255, 0, 255, 0, 0]); // top: blue, magenta
-        let bmp = Bmp::parse(&data).unwrap();
-        assert_eq!(bmp.pixel(0, 0), (0, 0, 255));
-        assert_eq!(bmp.pixel(1, 0), (255, 0, 255));
-        assert_eq!(bmp.pixel(0, 1), (255, 0, 0));
-        assert_eq!(bmp.pixel(1, 1), (0, 255, 0));
+    fn counts_magenta_inside_the_rect_only() {
+        // 3×1: magenta, magenta, grey (BGRA).
+        let frame = Snapshot { width: 3, height: 1, bgra: vec![255, 0, 255, 255, 255, 0, 255, 255, 80, 80, 80, 255] };
+        assert_eq!(count_marker(&frame, (0, 3, 0, 1)), 2);
+        assert_eq!(count_marker(&frame, (1, 3, 0, 1)), 1);
     }
 }

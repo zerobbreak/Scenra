@@ -19,7 +19,8 @@ export const simulateHang = (seconds: number) => invoke<void>("simulate_hang", {
 export const guardStatus = () => invoke<GuardCounts>("guard_status");
 export const clearStop = () => invoke<void>("clear_stop");
 
-export type ObsStatus = { version: string; profile: string; recording: boolean; mic: string | null };
+/** What a take records: the monitor, the default mic, and the encoder. */
+export type RecorderStatus = { mic: string | null; monitor: string; width: number; height: number; encoder: string };
 export type TakeResult = {
   dir: string;
   video: string;
@@ -27,17 +28,17 @@ export type TakeResult = {
   microphoneSeconds: number;
   sampleRate: number;
   channels: number;
-  /** Frames OBS dropped to rendering or encoding lag, in percent. */
-  droppedFramesPercent: number;
+  /** Frames that reached the recorder more than 100 ms late (the machine fell behind), in percent. */
+  lateFramesPercent: number;
   /** Physical memory free when the take stopped, in MB. */
   freeMemoryMb: number;
+  /** Scenra's own committed memory when the take stopped, in MB. */
+  scenraMemoryMb: number;
 };
-export const obsStatus = () => invoke<ObsStatus>("obs_status");
+export const recorderStatus = () => invoke<RecorderStatus>("recorder_status");
 /** `folder` is relative to the takes folder; without it the take gets a timestamped one. */
 export const startTake = (folder?: string) => invoke<string>("start_take", { folder: folder ?? null });
-/** `keepProfile` leaves OBS on the Scenra profile for the next scene of a recorded session. */
-export const stopTake = (keepProfile = false) => invoke<TakeResult>("stop_take", { keepProfile });
-export const restoreObsProfile = () => invoke<void>("restore_obs_profile");
+export const stopTake = () => invoke<TakeResult>("stop_take");
 
 export type TakePreflight = { freeMemoryMb: number; warning: string | null };
 export const takePreflight = () => invoke<TakePreflight>("take_preflight");

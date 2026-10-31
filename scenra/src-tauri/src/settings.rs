@@ -11,11 +11,17 @@ pub struct Settings {
     /// Size of the pill and control bar relative to their designed size, on top of Windows
     /// display scaling. 1.0 = as designed.
     pub overlay_zoom: f64,
+    /// The monitor takes record, as a Windows device name (`\\.\DISPLAY2`); `None` = primary.
+    pub capture_monitor: Option<String>,
+    /// Where recorded sessions are kept; `None` = `Videos\Scenra` (see `session.rs`).
+    pub sessions_dir: Option<std::path::PathBuf>,
+    /// Whether narration may be sent to Gemini to transcribe it (editor AI features).
+    pub transcription: crate::editor::transcript::Consent,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { overlay_zoom: 1.0 }
+        Self { overlay_zoom: 1.0, capture_monitor: None, sessions_dir: None, transcription: Default::default() }
     }
 }
 
@@ -42,4 +48,16 @@ pub fn save(app: &AppHandle, settings: &Settings) -> Result<(), String> {
     }
     let json = serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_settings_files_record_the_primary_monitor() {
+        let s: Settings = serde_json::from_str(r#"{ "overlayZoom": 1.25 }"#).unwrap();
+        assert_eq!(s.overlay_zoom, 1.25);
+        assert_eq!(s.capture_monitor, None);
+    }
 }

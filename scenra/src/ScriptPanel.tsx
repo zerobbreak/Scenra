@@ -35,7 +35,7 @@ export default function ScriptPanel() {
     }
   }
 
-  // Rehearse reads the whole script without recording; Record makes each scene its own OBS take,
+  // Rehearse reads the whole script without recording; Record makes each scene its own take,
   // started from the pill.
   const open = (mode: Mode) =>
     run("Opening prompter…", async () => {

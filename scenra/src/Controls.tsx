@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { closeTeleprompter } from "./capture";
-import { clearStop, restoreObsProfile, stopTake } from "./engine";
+import { clearStop, stopTake } from "./engine";
 import { onPrompter, sendPrompter } from "./prompter";
 import { cancelSceneSetup } from "./script";
 
@@ -67,12 +67,10 @@ export default function Controls() {
     setPaused(!paused);
     sendPrompter({ kind: "pause", paused: !paused });
   }
-  // Ends a scene take that's still recording (nothing to stop in a rehearsal), puts the
-  // presenter's OBS profile back, then closes.
+  // Ends a scene take that's still recording (nothing to stop in a rehearsal), then closes.
   async function stop() {
     await cancelSceneSetup().catch(() => {});
     await stopTake().catch(() => {});
-    await restoreObsProfile().catch(() => {});
     await closeTeleprompter();
   }
   function togglePeek() {

@@ -5,6 +5,8 @@
 **Status:** Living project specification  
 **Tagline:** *From script to scene.*
 
+> **2026-10-31:** Scenra no longer uses OBS. It records with its own built-in recorder (Windows.Graphics.Capture + WASAPI); see [ADR 0001](../docs/adr/0001-built-in-recorder.md). OBS mentions in the Phase 0 plan below are historical.
+
 ## 1. Project Overview
 
 **Category:** AI-assisted desktop recording and content creation  
@@ -26,7 +28,7 @@ The goal is to make software demonstrations **structured, repeatable, profession
 - Learn application workflows from user demonstrations.
 - Automate approved interactions with visible, natural mouse and keyboard actions.
 - Synchronize actions with narration.
-- Control OBS Studio to record individual scenes.
+- Record individual scenes with a built-in screen and mic recorder.
 - Support scene retakes without restarting a whole recording.
 - Store projects, scripts, history, and preferences locally.
 - Support multiple AI providers through a modular interface.
@@ -37,7 +39,7 @@ The goal is to make software demonstrations **structured, repeatable, profession
 2. **Script:** Generate narration, scene breakdowns, action plans, and timing suggestions.
 3. **Teach:** User demonstrates the desired application workflow once.
 4. **Rehearse:** Scenra repeats and validates approved actions without recording.
-5. **Record:** User narrates while Scenra executes actions and OBS records.
+5. **Record:** User narrates while Scenra executes actions and records.
 6. **Export:** Save clips, separate narration audio, and recording metadata.
 
 ## 3. Technology Stack
@@ -52,7 +54,7 @@ The goal is to make software demonstrations **structured, repeatable, profession
 | Element discovery | Chrome DevTools Protocol (CDP) | Inspect Chromium-based applications |
 | Native automation | Windows UI Automation (UIA) | Inspect native Windows controls |
 | Input simulation | Windows APIs via Rust | Visible mouse and keyboard input |
-| Recording | OBS + obs-websocket | Video and audio capture |
+| Recording | Built-in: Windows.Graphics.Capture + Media Foundation H.264, WASAPI mic | Video and audio capture |
 | Credential storage | Windows Credential Manager | API keys and sensitive demo values |
 
 Python is not required initially. Playwright is a possible future browser automation option, if direct CDP proves insufficient.
@@ -65,7 +67,7 @@ Python is not required initially. Playwright is a possible future browser automa
 | AI Script Studio | Script generation, scene breakdown, narration, content formats | P1 |
 | Teach Engine | Capture interactions, identify elements, record workflows | P1 |
 | Automation Engine | CDP, UIA, visible cursor, human-like typing, scrolling | P1 |
-| Recording Director | OBS integration, narration checkpoints, hotkeys, scene recording | P1 |
+| Recording Director | Built-in recorder, narration checkpoints, hotkeys, scene recording | P1 |
 | Scene Manager | Rehearsals, retries, scene boundaries, recording history | P1 |
 | Content Export | Video clips, separate narration tracks, metadata | P1 |
 | Advanced Production | TTS, subtitles, zoom effects, clip stitching | Later |
@@ -118,7 +120,7 @@ Each step can execute **before**, **during**, or **after** narration. Manual hot
 
 ### Recording and Retakes
 
-OBS records application interactions and microphone audio. The teleprompter must stay out of the captured image. Each scene is saved separately, enabling retries without redoing the whole demo.
+Scenra records application interactions and microphone audio. The teleprompter must stay out of the captured image. Each scene is saved separately, enabling retries without redoing the whole demo.
 
 Suggested output structure:
 
@@ -131,7 +133,7 @@ recordings/
     └── metadata.json
 ```
 
-OBS may record multitrack MKV with the microphone isolated on a dedicated track, which Scenra can extract afterward. Preflight must validate the required OBS configuration.
+The microphone is recorded to its own WAV file, aligned to the video's first frame. Preflight checks the monitor and mic.
 
 ### Safety
 
@@ -150,7 +152,7 @@ OBS may record multitrack MKV with the microphone isolated on a dedicated track,
 - AI-assisted project understanding and script generation
 - Teach → Rehearse → Record workflow
 - Approved automation with natural cursor movement
-- OBS recording and individual scene retakes
+- Built-in recording and individual scene retakes
 - Local project storage and recording history
 
 ### Later

@@ -11,7 +11,6 @@ use windows::Win32::Security::Credentials::{CRED_TYPE_GENERIC, CREDENTIALW, Cred
 use windows::core::HSTRING;
 
 pub const GEMINI_TARGET: &str = "Scenra/gemini";
-pub const OBS_TARGET: &str = "Scenra/obs";
 pub const GEMINI_ENV: &str = "SCENRA_GEMINI_API_KEY";
 
 /// Where a key was found, for status display. Never carries the key itself.
@@ -30,11 +29,6 @@ pub fn gemini_key() -> Option<(String, KeySource)> {
         .ok()
         .filter(|k| !k.trim().is_empty())
         .map(|k| (k.trim().to_owned(), KeySource::Environment))
-}
-
-/// The obs-websocket password, if OBS has authentication on.
-pub fn obs_password() -> Option<String> {
-    read_generic(OBS_TARGET)
 }
 
 /// Reads a generic credential's secret. `cmdkey` stores it as UTF-16.

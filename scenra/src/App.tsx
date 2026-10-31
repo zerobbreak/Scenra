@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import Button from "./Button";
 import DisplayPanel from "./DisplayPanel";
+import { openEditor } from "./editor/editor";
 import { displayInfo, MonitorInfo } from "./display";
 import EnginePanel from "./EnginePanel";
 import ScriptPanel from "./ScriptPanel";
@@ -61,6 +62,13 @@ export default function App() {
 
   return (
     <main className="mx-auto max-w-2xl space-y-6 p-6">
+      <section className="flex items-center justify-between rounded-lg bg-zinc-900 p-4">
+        <div>
+          <p className="m-0 font-medium">Editor</p>
+          <p className="m-0 text-sm text-zinc-400">Join a recorded session's scenes into one finished video.</p>
+        </div>
+        <Button onClick={() => void openEditor()}>Open editor</Button>
+      </section>
       <DisplayPanel />
       <hr className="border-zinc-800" />
 
@@ -68,7 +76,7 @@ export default function App() {
         <p className="text-xs uppercase tracking-widest text-indigo-400">Phase 0 · Step 1</p>
         <h1 className="text-xl font-semibold">Teleprompter capture exclusion</h1>
         <p className="mt-1 text-sm text-zinc-400">
-          Open the teleprompter over the demo target, record with OBS, and check the
+          Open the teleprompter over the demo target, record a take, and check the
           teleprompter is missing from the video. Procedure: docs/phase0/01-capture-exclusion.md
         </p>
       </header>
@@ -102,13 +110,13 @@ export default function App() {
             update(captureStatus);
           }}
         >
-          {matrixRunning ? "Running matrix…" : "Run OBS matrix"}
+          {matrixRunning ? "Running matrix…" : "Run capture matrix"}
         </Button>
       </section>
 
       {matrix && (
         <div className="space-y-1 rounded-lg bg-zinc-900 p-4 text-sm">
-          <p className="font-medium">OBS matrix at {Math.round(matrix[0]?.scale * 100)} % scaling</p>
+          <p className="font-medium">Capture matrix at {Math.round(matrix[0]?.scale * 100)} % scaling</p>
           {matrix.map((row) => (
             <p key={row.name} className={row.passed ? "text-emerald-300" : "text-red-300"}>
               {row.passed ? "PASS" : "FAIL"} · {row.name} ·{" "}
@@ -153,7 +161,7 @@ export default function App() {
           <p className="mt-1 text-xs opacity-80">
             {probe.markerPixels.toLocaleString()} of {probe.totalPixels.toLocaleString()} pixels
             matched the marker · rect {probe.rect.join(", ")} (physical px). GDI is a pre-check;
-            OBS is the real gate.
+            the capture matrix is the real gate.
           </p>
         </div>
       )}
