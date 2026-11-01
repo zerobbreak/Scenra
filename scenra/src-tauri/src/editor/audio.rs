@@ -144,6 +144,12 @@ fn r3(t: f64) -> f64 {
 pub fn tidy(scene: &SceneEdit, duration: f64, speech: &[(f64, f64)], actions: &[ActionRecord]) -> SceneEdit {
     let mut out = scene.clone();
     out.cuts.retain(|c| matches!(c.source, Source::Manual));
+    // Trims with a note are automatic: drop them too, so a smaller new trim can't leave an old
+    // one in place under a cleared note.
+    if out.trim_note.take().is_some() {
+        out.trim_in = 0.0;
+        out.trim_out = None;
+    }
     let busy: Vec<(f64, f64)> = speech.iter().copied().chain(actions.iter().map(|a| (a.start, a.end))).collect();
     let (Some(first), Some(last)) = (
         busy.iter().map(|b| b.0).min_by(f64::total_cmp),
@@ -163,7 +169,9 @@ pub fn tidy(scene: &SceneEdit, duration: f64, speech: &[(f64, f64)], actions: &[
         out.trim_out = Some(r3(trim_out));
         notes.push(format!("{:.1} s of silence at the end", duration - trim_out));
     }
-    out.trim_note = (!notes.is_empty()).then(|| notes.join(", "));
+    if !notes.is_empty() {
+        out.trim_note = Some(notes.join(", "));
+    }
 
     // Long gaps between speech, unless something happens on screen in them.
     for pair in speech.windows(2) {
@@ -320,6 +328,17 @@ mod tests {
         assert_eq!(out.cuts.len(), 1);
         assert!(matches!(&out.cuts[0].source, Source::Ai { reason } if reason.contains("pause")));
         assert!(out.trim_note.as_deref().unwrap().contains("start"));
+    }
+
+    #[test]
+    fn tidy_replaces_an_old_automatic_trim_and_keeps_a_manual_one() {
+        // Speech starts at once, so this run wants no trim at the start.
+        let pcm = tone(48_000, &[(2.0, 0.3), (0.2, 0.0)]);
+        let auto = SceneEdit { take: Some("t".into()), trim_in: 2.0, trim_note: Some("old".into()), ..Default::default() };
+        let out = tidy(&auto, pcm.seconds(), &speech(&pcm), &[]);
+        assert_eq!((out.trim_in, out.trim_out, out.trim_note), (0.0, None, None));
+        let manual = SceneEdit { trim_in: 0.3, trim_note: None, ..auto };
+        assert_eq!(tidy(&manual, pcm.seconds(), &speech(&pcm), &[]).trim_in, 0.3);
     }
 
     #[test]

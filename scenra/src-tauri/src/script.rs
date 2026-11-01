@@ -167,14 +167,22 @@ fn validate(scenario: &Scenario) -> Result<(), String> {
         if scene.lines.iter().all(|l| l.text.trim().is_empty()) {
             return Err(format!("Scene {} has no narration", s + 1));
         }
-        for line in &scene.lines {
+        for (l, line) in scene.lines.iter().enumerate() {
             let words = line.text.split_whitespace().count();
-            for action in &line.actions {
+            for (a, action) in line.actions.iter().enumerate() {
+                // Hand-written actions often have no label yet: name them some other way.
+                let name = if !action.label.trim().is_empty() {
+                    format!("“{}”", action.label.trim())
+                } else if let Some(step) = &action.step {
+                    step.describe()
+                } else {
+                    format!("action {} of line {}", a + 1, l + 1)
+                };
                 if action.word >= words {
-                    return Err(format!("Scene {}: “{}” fires on a word that isn't in its line", s + 1, action.label));
+                    return Err(format!("Scene {}: {name} fires on a word that isn't in its line", s + 1));
                 }
                 if action.step.is_none() && action.target.trim().is_empty() {
-                    return Err(format!("Scene {}: “{}” has nothing to click", s + 1, action.label));
+                    return Err(format!("Scene {}: {name} has nothing to click", s + 1));
                 }
             }
         }
@@ -262,6 +270,20 @@ pub fn press_action(
 mod tests {
     use super::*;
     use crate::teach::TeachStep;
+
+    #[test]
+    fn errors_name_unlabelled_hand_written_actions() {
+        let script = |actions: Vec<crate::ai::Action>| Scenario {
+            title: "t".into(),
+            scenes: vec![crate::ai::Scene { title: "s".into(), lines: vec![crate::ai::Line { text: "open the file".into(), actions }] }],
+            warnings: vec![],
+        };
+        let step = crate::steps::Step::Search { query: "todo".into() };
+        let late = crate::ai::Action { word: 5, target: String::new(), label: String::new(), step: Some(step) };
+        assert_eq!(validate(&script(vec![late])).unwrap_err(), "Scene 1: Search “todo” fires on a word that isn't in its line");
+        let empty = crate::ai::Action { word: 0, target: " ".into(), label: String::new(), step: None };
+        assert_eq!(validate(&script(vec![empty])).unwrap_err(), "Scene 1: action 1 of line 1 has nothing to click");
+    }
 
     fn state(heading: &str) -> page::InitialState {
         page::InitialState { url: "http://localhost/".into(), headings: vec![heading.into()], dialogs: vec![], code: None }

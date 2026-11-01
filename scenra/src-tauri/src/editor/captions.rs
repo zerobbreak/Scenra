@@ -2,6 +2,7 @@
 //! time (cut words drop out), grouped into cues of at most two 42-character lines and 6 s, and
 //! written as SubRip (`.srt`) next to the export.
 
+use super::assemble::is_filler_sound;
 use super::model::Segment;
 use super::transcript::Word;
 
@@ -25,8 +26,9 @@ pub fn cues<'a>(segments: &[Segment], words_of: impl Fn(&str) -> Option<&'a [Wor
             words_of(&s.take)
                 .unwrap_or_default()
                 .iter()
-                // A word belongs to the segment its midpoint falls in.
-                .filter(move |w| !w.filler && (s.src_in..s.src_out).contains(&((w.start + w.end) / 2.0)))
+                // A word belongs to the segment its midpoint falls in. Every word left in the video
+                // is captioned, flagged or not; only hesitation sounds (um, uh…) are left out.
+                .filter(move |w| !is_filler_sound(&w.text) && (s.src_in..s.src_out).contains(&((w.start + w.end) / 2.0)))
                 .map(move |w| {
                     let ms = |t: f64| (t * 1000.0).round() / 1000.0;
                     (ms(s.out_at + (w.start.max(s.src_in) - s.src_in)), ms(s.out_at + (w.end.min(s.src_out) - s.src_in)), w.text.as_str())
@@ -111,6 +113,13 @@ mod tests {
         assert_eq!((cues[0].start, cues[0].end), (0.2, 1.55));
         assert_eq!(cues[1].text, "Done.");
         assert!((cues[1].start - 1.85).abs() < 1e-9);
+    }
+
+    #[test]
+    fn flagged_words_left_in_the_video_are_captioned() {
+        let words = [w("start", 1.0, 1.3), Word { filler: true, ..w("a,", 1.4, 1.5) }, Word { filler: true, ..w("Um", 1.6, 1.7) }, w("new", 1.9, 2.1)];
+        let cues = cues(&[seg("a", 0.0, 3.0, 0.0)], |_| Some(&words[..]));
+        assert_eq!(cues[0].text, "start a, new");
     }
 
     #[test]

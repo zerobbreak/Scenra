@@ -133,12 +133,22 @@ fn level_takes(dir: &Path, takes: &[&str]) -> Result<(), String> {
     let cache = dir.join(CACHE_DIR);
     std::fs::create_dir_all(&cache).map_err(|e| format!("{}: {e}", cache.display()))?;
     for take in takes {
-        let pcm = audio::read_wav(&dir.join(take).join(library::MIC))?;
+        let mic = dir.join(take).join(library::MIC);
+        let (out, stamp) = (cache.join(format!("{take}.wav")), cache.join(format!("{take}.key")));
+        // Reuse a levelled copy made from this exact recording.
+        let key = transcript::key(&mic).map(|(bytes, modified)| format!("{bytes} {modified}"));
+        if out.is_file() && key.is_some() && std::fs::read_to_string(&stamp).ok() == key {
+            continue;
+        }
+        let pcm = audio::read_wav(&mic)?;
         let levelled = match audio::loudness(&pcm) {
             Some(measured) => audio::level(&pcm, audio::gain_db(measured)),
             None => pcm, // silent take: nothing to level
         };
-        audio::write_wav(&cache.join(format!("{take}.wav")), &levelled)?;
+        audio::write_wav(&out, &levelled)?;
+        if let Some(key) = key {
+            std::fs::write(&stamp, key).map_err(|e| format!("{}: {e}", stamp.display()))?;
+        }
     }
     Ok(())
 }
@@ -272,6 +282,7 @@ pub fn export_session(app: AppHandle, state: tauri::State<'_, ExportState>, dir:
         .join(library::EXPORT_DIR)
         .join(format!("{} {}.mp4", file_stem(&data.title), crate::take::stamp()));
     let mut used: Vec<&str> = data.timeline.segments.iter().map(|s| s.take.as_str()).collect();
+    used.sort_unstable();
     used.dedup();
     if let Err(e) = level_takes(&dir, &used) {
         *state.cancel.lock().map_err(err)? = None;
@@ -407,6 +418,23 @@ pub fn reveal_in_explorer(app: AppHandle, path: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn levelled_audio_is_reused_until_the_recording_changes() {
+        let dir = std::env::temp_dir().join(format!("scenra-level-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        library::tests::make_take(&dir, "scene-01-take-1", 1.0);
+        level_takes(&dir, &["scene-01-take-1"]).unwrap();
+        let out = dir.join(CACHE_DIR).join("scene-01-take-1.wav");
+        std::fs::write(&out, b"kept").unwrap();
+        level_takes(&dir, &["scene-01-take-1"]).unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), b"kept");
+        // A longer recording (a new size) is levelled again.
+        library::tests::make_take(&dir, "scene-01-take-1", 2.0);
+        level_takes(&dir, &["scene-01-take-1"]).unwrap();
+        assert_ne!(std::fs::read(&out).unwrap(), b"kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn titles_become_safe_file_names() {

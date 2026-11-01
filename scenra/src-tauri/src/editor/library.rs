@@ -227,12 +227,15 @@ fn default_edit(scene_count: usize, takes: &[TakeInfo]) -> Edit {
     Edit { scenes, ..Default::default() }
 }
 
-/// Makes sure every scene has an entry, keeping what the presenter already chose.
+/// Makes sure every scene has an entry, keeping what the presenter already chose. A scene saved
+/// before it was recorded (no take) gets its latest take; leaving a scene out uses `excluded`.
 fn reconcile(mut edit: Edit, scene_count: usize, takes: &[TakeInfo]) -> Edit {
     let defaults = default_edit(scene_count, takes);
     for scene in defaults.scenes {
-        if !edit.scenes.iter().any(|s| s.scene == scene.scene) {
-            edit.scenes.push(scene);
+        match edit.scenes.iter_mut().find(|s| s.scene == scene.scene) {
+            Some(saved) if saved.take.is_none() => saved.take = scene.take,
+            Some(_) => {}
+            None => edit.scenes.push(scene),
         }
     }
     edit.scenes.sort_by_key(|s| s.scene);
@@ -335,6 +338,17 @@ pub(crate) mod tests {
         assert_eq!(parse_folder("scene-02-take-3"), Some((1, 3)));
         assert_eq!(parse_folder("scene-00-take-1"), None);
         assert_eq!(parse_folder("export"), None);
+    }
+
+    #[test]
+    fn a_scene_saved_before_recording_gets_its_take_later() {
+        let s = temp("late-take").join("20261031-100000");
+        make_take(&s, "scene-01-take-1", 2.0);
+        let mut edit = load(&s).unwrap().edit;
+        edit.scenes.push(SceneEdit { scene: 1, ..Default::default() });
+        save_edit(&s, &edit).unwrap();
+        make_take(&s, "scene-02-take-1", 1.5);
+        assert_eq!(load(&s).unwrap().edit.scenes[1].take.as_deref(), Some("scene-02-take-1"));
     }
 
     #[test]
