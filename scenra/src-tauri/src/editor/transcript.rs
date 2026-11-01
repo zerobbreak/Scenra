@@ -144,6 +144,13 @@ pub fn snap(mut words: Vec<Word>, speech: &[(f64, f64)]) -> Vec<Word> {
             w.end = (w.end * 1000.0).round() / 1000.0;
         }
     }
+    // Snapping moves words independently; keep them in spoken order.
+    let mut last = 0.0f64;
+    for w in &mut words {
+        w.start = w.start.max(last);
+        w.end = w.end.max(w.start + 0.01);
+        last = w.start;
+    }
     words
 }
 
@@ -232,6 +239,12 @@ pub(crate) mod tests {
         assert_eq!((words[1].start, words[1].end), (8.03, 8.35));
         assert_eq!((words[2].start, words[2].end), (11.01, 11.4));
         assert_eq!((words[3].start, words[3].end), (20.0, 20.2)); // nowhere near speech: unchanged
+    }
+
+    #[test]
+    fn snapping_keeps_spoken_order() {
+        let words = snap(vec![w("right", 10.80, 11.1), w("now.", 10.9, 11.4)], &[(9.0, 11.2)]);
+        assert!(words[0].start <= words[1].start, "{words:?}");
     }
 
     #[test]
