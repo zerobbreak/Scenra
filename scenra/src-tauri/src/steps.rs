@@ -564,7 +564,9 @@ const SELECTION_JS: &str = r#"(() => {
   }
   const rows = [...ed.querySelectorAll('.view-overlays > div')];
   const lineOf = (d) => tops.get(d.style.top);
-  const selected = rows.filter((d) => d.querySelector('.selected-text')).map(lineOf).filter(Boolean);
+  // A whole-line selection ends at the start of the next line, which gets an empty (zero-width) mark.
+  const marked = (d) => [...d.querySelectorAll('.selected-text')].some((s) => s.getBoundingClientRect().width > 0.5);
+  const selected = rows.filter(marked).map(lineOf).filter(Boolean);
   const current = rows.filter((d) => d.querySelector('.current-line')).map(lineOf).filter(Boolean);
   const shown = [...tops.values()];
   return { uri: ed.getAttribute('data-uri'), selected, current: current[0] || null,

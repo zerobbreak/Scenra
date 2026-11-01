@@ -77,7 +77,9 @@ pub fn snapshot_js() -> String {
     if (r.height > 0 && r.top >= g.top - 1 && r.bottom <= g.bottom + 1) full.push(+n.textContent);
   }}
   const lineOf = (d) => tops.get(d.style.top);
-  const selected = [...ed.querySelectorAll('.view-overlays > div')].filter((d) => d.querySelector('.selected-text')).map(lineOf).filter(Boolean);
+  // A whole-line selection ends at the start of the next line, which gets an empty (zero-width) mark.
+  const marked = (d) => [...d.querySelectorAll('.selected-text')].some((s) => s.getBoundingClientRect().width > 0.5);
+  const selected = [...ed.querySelectorAll('.view-overlays > div')].filter(marked).map(lineOf).filter(Boolean);
   const shown = [...tops.values()];
   return {{ state, selected: [...new Set(selected)].sort((a, b) => a - b),
     visible: full.length ? [Math.min(...full), Math.max(...full)] : null,
@@ -105,7 +107,9 @@ pub fn listener_js(binding: &str) -> String {
     if (ev.key === 'Enter' && quick) {{
       const value = (quick.querySelector('input') || {{}}).value || '';
       const row = quick.querySelector('.monaco-list-row.focused');
-      if (value.startsWith('>') && row) send(ev, {{ kind: 'palette', text: row.getAttribute('aria-label') || '' }});
+      // The visible name: the row's aria-label also carries its key binding ("…, Alt+Z").
+      const name = row && (row.querySelector('.label-name') || {{}}).textContent;
+      if (value.startsWith('>') && name) send(ev, {{ kind: 'palette', text: name }});
       return;
     }}
     if (ev.key === 'Enter' && a && a.closest('.search-view') && a.tagName === 'TEXTAREA') {{
@@ -113,6 +117,9 @@ pub fn listener_js(binding: &str) -> String {
       return;
     }}
     if (['Control', 'Shift', 'Alt', 'Meta'].includes(ev.key)) return;
+    // Ctrl+A, Ctrl+Backspace… in a text box (Search, Find, a rename box) edit its text: not commands.
+    const textBox = a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA') && !a.closest('.monaco-editor');
+    if (textBox) return;
     if (ev.ctrlKey || ev.altKey || ev.metaKey) {{
       const key = ev.key.length === 1 ? ev.key.toUpperCase() : ev.key;
       const combo = [ev.ctrlKey && 'Ctrl', ev.altKey && 'Alt', ev.shiftKey && 'Shift', ev.metaKey && 'Win', key].filter(Boolean).join('+');
@@ -558,6 +565,12 @@ mod tests {
                 assert_eq!(snap.selected, vec![stop, stop + 1, stop + 2], "replayed highlight");
             }
         }
+        // An empty line inside a selection still counts as selected.
+        let blank = text.lines().enumerate().skip(stop as usize).find(|(_, l)| l.trim().is_empty()).unwrap().0 as u32 + 1;
+        let around = Anchor { line: blank - 1, text: text.lines().nth(blank as usize - 2).unwrap().trim().into(), symbol: None };
+        act(Step::Highlight { path: take.into(), at: around, lines: 3 });
+        let snap: Snapshot = serde_json::from_value(view.evaluate(&snapshot_js()).unwrap()).unwrap();
+        assert_eq!(snap.selected, vec![blank - 1, blank, blank + 1], "selection across the empty line {blank}");
         drop(targets);
         let _ = std::fs::remove_dir_all(&profile);
     }
