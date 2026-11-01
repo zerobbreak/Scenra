@@ -24,3 +24,5 @@ export const launchTarget = () => invoke<CapabilityProfile>("launch_target");
 export const targetProfile = () => invoke<CapabilityProfile | null>("target_profile");
 export const stopTarget = () => invoke<void>("stop_target");
 export const launchChrome = (url: string) => invoke<CapabilityProfile>("launch_chrome", { url });
+/** VS Code on the codebase folder (or the saved one), with Scenra's recording profile. */
+export const launchVscode = (folder?: string) => invoke<CapabilityProfile>("launch_vscode", { folder: folder || null });

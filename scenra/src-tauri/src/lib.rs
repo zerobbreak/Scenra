@@ -19,6 +19,8 @@ mod setup;
 mod take;
 mod target;
 mod teach;
+mod steps;
+mod vscode;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -60,12 +62,15 @@ pub fn run() {
             display::set_capture_monitor,
             target::launch_target,
             target::launch_chrome,
+            target::launch_vscode,
             target::target_profile,
             target::stop_target,
             script::ai_status,
             script::draft_script,
             script::draft_from_teach,
             script::current_script,
+            script::set_script,
+            steps::capture_code_position,
             script::check_scene_start,
             setup::prepare_scene,
             setup::cancel_scene_setup,

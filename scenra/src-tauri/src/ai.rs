@@ -48,6 +48,9 @@ pub struct Action {
     pub target: String,
     /// What the pill shows, e.g. "Click Recall".
     pub label: String,
+    /// A code step (open, scroll, highlight…) instead of a click on `target`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<crate::steps::Step>,
 }
 
 pub trait AiProvider {
@@ -339,6 +342,7 @@ fn resolve(draft: Draft, controls: &[Control]) -> Scenario {
                             word,
                             target: control.label.clone(),
                             label: format!("Click {}", title_case(&short(&control.label))),
+                            step: None,
                         });
                     }
                     actions.sort_by_key(|a| a.word);
@@ -399,6 +403,7 @@ fn resolve_aligned(draft: Draft, steps: &[TeachStep]) -> Result<Aligned, String>
                     word,
                     target: step.label.clone(),
                     label: format!("Click {}", title_case(&short(&step.label))),
+                    step: None,
                 });
             }
             resolved.push(Line { text: line.text, actions });
@@ -551,7 +556,7 @@ mod tests {
                 label: (*label).into(),
                 test_id: None,
                 role: Some("button".into()),
-                before: crate::page::InitialState { url: "http://localhost/secret-path".into(), headings: vec![format!("H{index}")], dialogs: vec![] },
+                before: crate::page::InitialState { url: "http://localhost/secret-path".into(), headings: vec![format!("H{index}")], dialogs: vec![], code: None },
                 // An empty label stands for a click into a field.
                 flags: if label.is_empty() { vec![crate::teach::StepFlag::Field] } else { vec![] },
             })
