@@ -136,6 +136,19 @@ pub fn mp4_seconds(path: &Path) -> Option<f64> {
     None
 }
 
+/// The highest attempt number per scene among every take folder, playable or not, so a retake
+/// never reuses a folder that already holds files.
+pub fn attempts_in(dir: &Path) -> std::collections::BTreeMap<usize, u32> {
+    let mut attempts = std::collections::BTreeMap::new();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        if let Some((scene, attempt)) = parse_folder(&entry.file_name().to_string_lossy()) {
+            let n = attempts.entry(scene).or_insert(0);
+            *n = (*n).max(attempt);
+        }
+    }
+    attempts
+}
+
 fn takes_in(dir: &Path) -> Vec<TakeInfo> {
     let mut takes: Vec<TakeInfo> = std::fs::read_dir(dir)
         .into_iter()

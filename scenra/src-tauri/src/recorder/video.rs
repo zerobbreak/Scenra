@@ -266,13 +266,12 @@ impl Video {
 
     /// Stops at `stop_qpc`: the video ends there even if the screen held still before it.
     pub fn stop(self, stop_qpc: i64) -> Result<VideoStats, String> {
-        let encoder = {
+        // A failed last frame still stops capture and finishes the MP4, so the take stays playable.
+        let (closed, encoder) = {
             let callback = self.control.callback();
             let mut handler = callback.lock();
-            let closed = handler.close_at(stop_qpc);
-            let encoder = handler.encoder.take();
-            closed.map_err(|e| format!("Couldn't write the last frame: {e}"))?;
-            encoder
+            let closed = handler.close_at(stop_qpc).map_err(|e| format!("Couldn't write the last frame: {e}"));
+            (closed, handler.encoder.take())
         };
         let stopped = self.control.stop().map_err(|e| format!("Screen capture failed: {e}"));
         let finished = match encoder {
@@ -281,6 +280,7 @@ impl Video {
         };
         stopped?;
         finished?;
+        closed?;
         Ok(VideoStats {
             path: self.path,
             first_qpc: self.shared.first_qpc.load(Ordering::SeqCst),

@@ -71,6 +71,17 @@ impl Mic {
     }
 }
 
+/// Frames of silence to insert before a packet stamped `qpc`, when it starts later than the
+/// frames written so far reach (by more than 20 ms, to ignore timestamp jitter).
+fn missing_frames(first_qpc: i64, written: u64, qpc: i64) -> u64 {
+    let expected = first_qpc + (written as i64) * 10_000_000 / i64::from(SAMPLE_RATE);
+    let late = qpc - expected;
+    if late <= 200_000 {
+        return 0;
+    }
+    (late as u64) * u64::from(SAMPLE_RATE) / 10_000_000
+}
+
 fn capture(
     part: &Path, stop: &AtomicBool, first_qpc: &AtomicI64, ready: mpsc::Sender<Result<String, String>>,
 ) -> Result<(), String> {
@@ -102,6 +113,7 @@ fn capture(
 
     let block = usize::from(CHANNELS) * 2;
     let mut buf = vec![0u8; SAMPLE_RATE as usize * block];
+    let mut written: u64 = 0;
     let result = (|| -> Result<(), String> {
         while !stop.load(Ordering::SeqCst) {
             if event.wait_for_event(200).is_err() {
@@ -117,7 +129,21 @@ fn capture(
                 }
                 // The packet's QPC position, 100 ns units: the same clock as WGC frame times.
                 let _ = first_qpc.compare_exchange(0, info.timestamp as i64, Ordering::SeqCst, Ordering::SeqCst);
-                file.write_all(&buf[..got as usize * block]).map_err(err)?;
+                if !info.flags.timestamp_error {
+                    // Samples Windows dropped (a glitch on a busy machine) become silence, so
+                    // everything after them stays on the video's clock.
+                    let gap = missing_frames(first_qpc.load(Ordering::SeqCst), written, info.timestamp as i64);
+                    if gap > 0 {
+                        file.write_all(&vec![0u8; gap as usize * block]).map_err(err)?;
+                        written += gap;
+                    }
+                }
+                let data = &mut buf[..got as usize * block];
+                if info.flags.silent {
+                    data.fill(0);
+                }
+                file.write_all(data).map_err(err)?;
+                written += u64::from(got);
             }
         }
         Ok(())
@@ -125,4 +151,19 @@ fn capture(
     let _ = client.stop_stream();
     file.flush().map_err(err)?;
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dropped_samples_are_filled_but_jitter_is_not() {
+        let rate = u64::from(SAMPLE_RATE);
+        // One second written, next packet on time or 10 ms late: nothing to fill.
+        assert_eq!(missing_frames(1_000, rate, 1_000 + 10_000_000), 0);
+        assert_eq!(missing_frames(1_000, rate, 1_000 + 10_100_000), 0);
+        // 200 ms of samples lost: fill exactly that.
+        assert_eq!(missing_frames(1_000, rate, 1_000 + 12_000_000), rate / 5);
+    }
 }

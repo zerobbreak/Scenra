@@ -344,11 +344,7 @@ pub fn retake_scene(
     }
     let states: Vec<crate::page::InitialState> = crate::session::read_json(&dir.join(crate::session::INITIAL_FILE)).unwrap_or_default();
     let data = library::load(&dir)?;
-    let mut attempts = std::collections::BTreeMap::new();
-    for t in &data.takes {
-        let n = attempts.entry(t.scene).or_insert(0);
-        *n = (*n).max(t.attempt);
-    }
+    let attempts = library::attempts_in(&dir);
     *script.0.lock().map_err(err)? = Some(scenario.clone());
     *initial.0.lock().map_err(err)? = states;
     app.emit("script-changed", &scenario).map_err(err)?;

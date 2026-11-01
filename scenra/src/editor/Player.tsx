@@ -50,11 +50,12 @@ const Player = forwardRef<PlayerHandle, { dir: string; segments: Segment[]; onPo
     };
 
     const seek = async (o: number) => {
-      const i = Math.max(0, segments.findIndex((s) => o < s.outAt + (s.srcOut - s.srcIn)));
-      const s = segments[i === -1 ? segments.length - 1 : i];
+      const found = segments.findIndex((s) => o < s.outAt + (s.srcOut - s.srcIn));
+      const i = found === -1 ? segments.length - 1 : found;
+      const s = segments[i];
       if (!s) return;
       const wasPlaying = playing;
-      await load(segments.indexOf(s), s.srcIn + Math.max(0, o - s.outAt));
+      await load(i, Math.min(s.srcOut, s.srcIn + Math.max(0, o - s.outAt)));
       if (wasPlaying) void Promise.all([video.current?.play(), audio.current?.play()]);
     };
 
@@ -77,6 +78,7 @@ const Player = forwardRef<PlayerHandle, { dir: string; segments: Segment[]; onPo
     useEffect(() => {
       if (!playing) return;
       let frame = 0;
+      let stopped = false;
       const tick = async () => {
         const v = video.current, a = audio.current;
         const i = current.current, s = segments[i];
@@ -90,7 +92,10 @@ const Player = forwardRef<PlayerHandle, { dir: string; segments: Segment[]; onPo
           v.pause();
           a.pause();
           await load(i + 1, segments[i + 1].srcIn);
+          // Paused or edited while the next segment loaded: don't resume.
+          if (stopped) return;
           await Promise.all([v.play(), a.play()]).catch(() => {});
+          if (stopped) return;
         } else {
           if (Math.abs(a.currentTime - v.currentTime) > MAX_DRIFT) a.currentTime = v.currentTime;
           report(i, v.currentTime);
@@ -98,7 +103,10 @@ const Player = forwardRef<PlayerHandle, { dir: string; segments: Segment[]; onPo
         frame = requestAnimationFrame(() => void tick());
       };
       frame = requestAnimationFrame(() => void tick());
-      return () => cancelAnimationFrame(frame);
+      return () => {
+        stopped = true;
+        cancelAnimationFrame(frame);
+      };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [playing, segments]);
 

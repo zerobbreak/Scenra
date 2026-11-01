@@ -163,6 +163,8 @@ function SessionView({ initial, onBack, onError }: { initial: SessionData; onBac
   const [asking, setAsking] = useState(false);
   const [assembling, setAssembling] = useState<{ done: number; total: number } | null>(null);
   const player = useRef<PlayerHandle>(null);
+  const saving = useRef<Promise<unknown>>(Promise.resolve());
+  const saveSeq = useRef(0);
 
   const { edit, timeline, takes } = data;
   const scene = edit.scenes.find((s) => s.scene === selected) ?? edit.scenes[0];
@@ -175,8 +177,13 @@ function SessionView({ initial, onBack, onError }: { initial: SessionData; onBac
       setFuture([]);
     }
     setData((d) => ({ ...d, edit: next }));
+    // Saves run one at a time, and only the newest result is shown, so a slow save can't undo a later edit.
+    const seq = ++saveSeq.current;
+    const save = saving.current.then(() => saveEdit(data.dir, next));
+    saving.current = save.catch(() => {});
     try {
-      setData(await saveEdit(data.dir, next));
+      const saved = await save;
+      if (seq === saveSeq.current) setData(saved);
     } catch (e) {
       onError(String(e));
     }
