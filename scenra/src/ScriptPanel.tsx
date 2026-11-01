@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import Button from "./Button";
 import { openTeleprompter } from "./capture";
-import { AiStatus, Mode, Scenario, aiStatus, currentScript, draftScript, startSession, words } from "./script";
-import { launchChrome, launchTarget } from "./target";
+import { AiStatus, Mode, Scenario, aiStatus, currentScript, draftScript, onScriptChanged, startSession, words } from "./script";
+import { launchChrome, launchTarget, launchVscode } from "./target";
+import ScriptEditor from "./ScriptEditor";
 import TeachPanel from "./TeachPanel";
 
 const DEFAULT_URL = "";
@@ -16,10 +17,15 @@ export default function ScriptPanel() {
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [folder, setFolder] = useState("");
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     aiStatus().then(setStatus);
     currentScript().then(setScript);
+    // Scripts can also be set from the prompter, a retake or the editor.
+    const unlisten = onScriptChanged(setScript);
+    return () => void unlisten.then((stop) => stop());
   }, []);
 
   async function run(label: string, action: () => Promise<void>) {
@@ -98,6 +104,31 @@ export default function ScriptPanel() {
         </Button>
       </div>
 
+      <div className="flex gap-2">
+        <label className="sr-only" htmlFor="codebase">Codebase folder</label>
+        <input
+          id="codebase"
+          placeholder="Codebase folder for VS Code (blank = the last one)"
+          value={folder}
+          onChange={(e) => setFolder(e.target.value)}
+          className="min-w-0 flex-1 rounded-md bg-zinc-900 px-3 py-1.5 text-sm ring-1 ring-zinc-700 focus:ring-indigo-500 focus:outline-none"
+        />
+        <Button
+          disabled={!!busy}
+          onClick={() =>
+            run("Launching VS Code…", async () => {
+              const profile = await launchVscode(folder);
+              const cdp = profile.capabilities.cdp;
+              setNote(cdp.available
+                ? "VS Code attached with Scenra's recording profile. Write a script by hand below, with code steps."
+                : `VS Code started, but Scenra can't attach: ${profile.warnings.join("; ")}`);
+            })
+          }
+        >
+          Launch VS Code
+        </Button>
+      </div>
+
       <div className="space-y-2">
         <label htmlFor="brief" className="text-sm text-zinc-400">Brief</label>
         <textarea
@@ -114,6 +145,9 @@ export default function ScriptPanel() {
           >
             Draft script with Gemini
           </Button>
+          <Button disabled={!!busy} onClick={() => setEditing(!editing)}>
+            {editing ? "Close editor" : script ? "Edit script by hand" : "Write script by hand"}
+          </Button>
           <Button disabled={!!busy || !script} onClick={() => open("rehearse")}>
             Rehearse
           </Button>
@@ -122,6 +156,18 @@ export default function ScriptPanel() {
           </Button>
         </div>
       </div>
+
+      {editing && (
+        // Starts from the script when opened; a script change elsewhere mustn't wipe an unsaved draft.
+        <ScriptEditor
+          initial={script}
+          onSaved={(saved) => {
+            setScript(saved);
+            setEditing(false);
+            setNote("Script saved. Rehearse it, or record its scenes.");
+          }}
+        />
+      )}
 
       <TeachPanel brief={brief} busy={!!busy} aiConfigured={!!status?.configured} run={run} onScript={setScript} />
 

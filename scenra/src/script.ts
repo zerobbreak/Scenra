@@ -2,7 +2,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 // Mirrors `ai::Scenario` in Rust.
-export type Action = { word: number; target: string; label: string };
+/** Where code is: a 1-based line hint, that line's text, and the enclosing symbol (see steps.rs). */
+export type Anchor = { line: number; text: string; symbol?: string | null };
+/** A code step in VS Code (docs/adr/0003-code-navigation.md). */
+export type Step =
+  | { kind: "open"; path: string; line?: number | null; instant?: boolean }
+  | { kind: "scroll"; path: string; at: Anchor; lines: number }
+  | { kind: "highlight"; path: string; at: Anchor; lines: number }
+  | { kind: "palette"; command: string }
+  | { kind: "search"; query: string };
+/** Fires on `word` of its line: clicks the control labelled `target`, or runs `step`. */
+export type Action = { word: number; target: string; label: string; step?: Step | null };
+export type CodePosition = { path: string; at: Anchor; lines: number };
 export type Line = { text: string; actions: Action[] };
 export type Scene = { title: string; lines: Line[] };
 export type Scenario = { title: string; scenes: Scene[]; warnings: string[] };
@@ -16,8 +27,12 @@ export type AiStatus = {
 export const aiStatus = () => invoke<AiStatus>("ai_status");
 export const draftScript = (brief: string) => invoke<Scenario>("draft_script", { brief });
 export const currentScript = () => invoke<Scenario | null>("current_script");
-export const approachAction = (target: string) => invoke<void>("approach_action", { target });
-export const pressAction = (target: string, expiresAt: number) => invoke<void>("press_action", { target, expiresAt });
+export const approachAction = (action: Action) => invoke<void>("approach_action", { action });
+export const pressAction = (action: Action, expiresAt: number) => invoke<void>("press_action", { action, expiresAt });
+/** Installs a script written or edited by hand. */
+export const setScript = (scenario: Scenario) => invoke<Scenario>("set_script", { scenario });
+/** VS Code's open file and selected lines, as a step position. */
+export const captureCodePosition = () => invoke<CodePosition>("capture_code_position");
 export const onScriptChanged = (handler: (s: Scenario) => void) =>
   listen<Scenario>("script-changed", (e) => handler(e.payload));
 

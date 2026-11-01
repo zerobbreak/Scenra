@@ -129,6 +129,59 @@ pub fn draft_from_teach(
     Ok(scenario)
 }
 
+/// Installs a script written or edited by hand. Every scene starts from the app as it is now;
+/// use “Use current page” in the prompter to approve a different start for later scenes.
+#[tauri::command(async)]
+pub fn set_script(
+    app: AppHandle, targets: State<'_, LaunchedTarget>, script: State<'_, CurrentScript>,
+    initial: State<'_, ScriptInitialState>, setup: State<'_, crate::setup::SetupState>,
+    teach: State<'_, TeachState>, mut scenario: Scenario,
+) -> Result<Scenario, String> {
+    setup.ensure_idle()?;
+    teach.ensure_idle()?;
+    validate(&scenario)?;
+    // A code step without a label gets one the pill can show ("Highlight take.rs 195–200").
+    for action in scenario.scenes.iter_mut().flat_map(|s| s.lines.iter_mut()).flat_map(|l| l.actions.iter_mut()) {
+        if action.label.trim().is_empty() {
+            action.label = match &action.step {
+                Some(step) => step.describe(),
+                None => format!("Click {}", action.target),
+            };
+        }
+    }
+    let (pid, port) = target::running(&targets)?;
+    crate::locate::restore_target(pid)?;
+    let state = page::initial_state(&mut page::page_session(port)?)?;
+    *initial.0.lock().map_err(err)? = vec![state; scenario.scenes.len()];
+    *script.0.lock().map_err(err)? = Some(scenario.clone());
+    app.emit("script-changed", &scenario).map_err(err)?;
+    Ok(scenario)
+}
+
+/// A hand-written script must have narration, and every action a word to fire on and something to do.
+fn validate(scenario: &Scenario) -> Result<(), String> {
+    if scenario.scenes.is_empty() {
+        return Err("Add at least one scene".into());
+    }
+    for (s, scene) in scenario.scenes.iter().enumerate() {
+        if scene.lines.iter().all(|l| l.text.trim().is_empty()) {
+            return Err(format!("Scene {} has no narration", s + 1));
+        }
+        for line in &scene.lines {
+            let words = line.text.split_whitespace().count();
+            for action in &line.actions {
+                if action.word >= words {
+                    return Err(format!("Scene {}: “{}” fires on a word that isn't in its line", s + 1, action.label));
+                }
+                if action.step.is_none() && action.target.trim().is_empty() {
+                    return Err(format!("Scene {}: “{}” has nothing to click", s + 1, action.label));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn current_script(script: State<'_, CurrentScript>) -> Result<Option<Scenario>, String> {
     Ok(script.0.lock().map_err(err)?.clone())
@@ -167,24 +220,39 @@ pub fn current_session(session: State<'_, CurrentSession>) -> Result<Option<Sess
 /// its trigger word.
 #[tauri::command(async)]
 pub fn approach_action(
-    targets: State<'_, LaunchedTarget>, setup: State<'_, crate::setup::SetupState>, take: State<'_, take::CurrentTake>, target: String,
+    targets: State<'_, LaunchedTarget>, setup: State<'_, crate::setup::SetupState>, take: State<'_, take::CurrentTake>, action: crate::ai::Action,
 ) -> Result<(), String> {
     setup.ensure_idle()?;
-    take::logged(&take, "approach", &target, || engine::approach(&targets, &Selector::Label(target.clone()), Pace::Natural).map(|_| ()))
+    match &action.step {
+        Some(step) => take::logged(&take, "approach", &action.label, || crate::steps::approach(&targets, step, Pace::Natural)),
+        None => take::logged(&take, "approach", &action.target, || {
+            engine::approach(&targets, &Selector::Label(action.target.clone()), Pace::Natural).map(|_| ())
+        }),
+    }
 }
 
-/// Clicks the control labelled `target` on its trigger word (re-aiming first if needed).
+/// Runs the action on its trigger word: clicks the control labelled `target` (re-aiming first if
+/// needed), or runs its code step.
 #[tauri::command(async)]
 pub fn press_action(
     targets: State<'_, LaunchedTarget>, setup: State<'_, crate::setup::SetupState>, take: State<'_, take::CurrentTake>,
-    target: String, expires_at: u64,
+    action: crate::ai::Action, expires_at: u64,
 ) -> Result<(), String> {
     setup.ensure_idle()?;
     let expiry = std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_millis(expires_at))
         .ok_or("Invalid action cue expiry")?;
     let remaining = expiry.duration_since(std::time::SystemTime::now())
-        .map_err(|_| "The action missed its cue; retry the scene")?
-        .min(std::time::Duration::from_millis(500));
+        .map_err(|_| "The action missed its cue; retry the scene")?;
+    if let Some(step) = &action.step {
+        if !crate::hooks::playback_active() || crate::hooks::foreign_seen() || crate::hooks::stopped() {
+            return Err("Playback interrupted; retry the scene.".into());
+        }
+        // The press is the whole step (a scroll or highlight takes seconds); it's logged as one
+        // span so the editor never cuts through it.
+        return take::logged(&take, "press", &action.label, || crate::steps::run(&targets, step, Pace::Natural));
+    }
+    let remaining = remaining.min(std::time::Duration::from_millis(500));
+    let target = action.target;
     take::logged(&take, "press", &target, || {
         engine::press_before(&targets, &Selector::Label(target.clone()), Some(std::time::Instant::now() + remaining))
     })
@@ -196,7 +264,7 @@ mod tests {
     use crate::teach::TeachStep;
 
     fn state(heading: &str) -> page::InitialState {
-        page::InitialState { url: "http://localhost/".into(), headings: vec![heading.into()], dialogs: vec![] }
+        page::InitialState { url: "http://localhost/".into(), headings: vec![heading.into()], dialogs: vec![], code: None }
     }
 
     fn session(labels: &[&str]) -> TeachSession {
@@ -260,7 +328,7 @@ pub fn check_scene_start(
     page::wait_until_settled(port, std::time::Duration::from_secs(15))?;
     let mut page = page::page_session(port)?;
     page::check_initial(&expected, &page::initial_state(&mut page)?)?;
-    if let Some(action) = scene.lines.iter().flat_map(|l| &l.actions).next() {
+    if let Some(action) = scene.lines.iter().flat_map(|l| &l.actions).next().filter(|a| a.step.is_none()) {
         page::check_control(&mut page, &action.target)?;
     }
     Ok(())
@@ -275,6 +343,9 @@ pub fn reset_scene_page(
     let expected = initial.0.lock().map_err(err)?.get(scene).cloned().ok_or("Draft a script first")?;
     let (pid, port) = target::running(&targets)?;
     crate::locate::restore_target(pid)?;
+    if let Some(code) = &expected.code {
+        return crate::steps::restore_state(&targets, code);
+    }
     page::restore_url(port, &expected.url, std::time::Duration::from_secs(15), &|| Ok(()))
 }
 
@@ -290,7 +361,7 @@ pub fn approve_scene_start(
     crate::locate::restore_target(pid)?;
     page::wait_until_settled(port, std::time::Duration::from_secs(15))?;
     let mut page = page::page_session(port)?;
-    if let Some(action) = selected.lines.iter().flat_map(|l| &l.actions).next() {
+    if let Some(action) = selected.lines.iter().flat_map(|l| &l.actions).next().filter(|a| a.step.is_none()) {
         page::check_control(&mut page, &action.target)?;
     }
     let baseline = page::initial_state(&mut page)?;

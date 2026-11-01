@@ -153,7 +153,7 @@ export function useReader(script: Scenario | null, session: Session | null, paus
   function approach(k: string, action: Action) {
     let ready = approached.current.get(k);
     if (!ready) {
-      ready = enqueue(() => approachAction(action.target));
+      ready = enqueue(() => approachAction(action));
       ready.catch(() => {}); // reported when the press awaits it
       approached.current.set(k, ready);
     }
@@ -163,12 +163,14 @@ export function useReader(script: Scenario | null, session: Session | null, paus
   function fire(k: string, action: Action) {
     fired.current.add(k);
     const cue = performance.now();
-    const expiresAt = Date.now() + 500;
+    // A click must land on its word. A code step may wait for the one before it (a scroll takes
+    // seconds); it runs as soon as that's done.
+    const expiresAt = Date.now() + (action.step ? 60_000 : 500);
     const ready = approach(k, action);
     enqueue(async () => {
       await ready;
-      if (performance.now() - cue > 500) throw new Error("Action missed its cue. Retry the scene.");
-      await pressAction(action.target, expiresAt);
+      if (!action.step && performance.now() - cue > 500) throw new Error("Action missed its cue. Retry the scene.");
+      await pressAction(action, expiresAt);
     })
       .then(() => setActions((a) => ({ ...a, [k]: "done" })))
       .catch((e) => {
@@ -220,8 +222,10 @@ export function useReader(script: Scenario | null, session: Session | null, paus
 
   /// Record mode: waits for the scene's clicks to land, then stops its take.
   async function endScene(scene: number) {
-    setPhase("saving");
+    // Code steps can take seconds (a smooth scroll), so one fired near the end may still be
+    // running or queued: the take ends after it, not on top of it.
     await queue.current;
+    setPhase("saving");
     await sleep(TAIL_MS);
     try {
       const take = await stopTake();

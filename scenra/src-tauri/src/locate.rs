@@ -112,9 +112,13 @@ fn find_js(selector: &Selector) -> String {
             r#"(() => {{
               const clean = (s) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
               const full = clean({label});
-              const els = [...document.querySelectorAll('a[href],button,[role=button],input,textarea,select')]
+              // In VS Code, tree items and tabs too: explorer rows and editor tabs are found by name.
+              // Web pages keep the rule Teach and the scene check use.
+              const code = !!document.querySelector('.monaco-workbench');
+              const els = [...document.querySelectorAll('a[href],button,[role=button],input,textarea,select' + (code ? ',[role=treeitem],[role=tab],[role=menuitem],[role=option]' : ''))]
                 .filter((e) => e.offsetParent !== null);
-              const text = (e) => clean(e.innerText || e.getAttribute('aria-label') || e.placeholder);
+              const named = (e) => /^(treeitem|tab|menuitem|option)$/.test(e.getAttribute('role') || '');
+              const text = (e) => clean(named(e) ? (e.getAttribute('aria-label') || e.innerText) : (e.innerText || e.getAttribute('aria-label') || e.placeholder));
               // A changed or ambiguous label must fail rather than select another control.
               const matches = els.filter((e) => text(e) === full);
               return matches.length === 1 ? matches[0] : null;
@@ -187,6 +191,35 @@ pub fn locate(session: &mut Session, pid: u32, selector: &Selector) -> Result<Lo
     })
 }
 
+/// Page CSS px → physical screen px for the page as it is now (no element needed). Used by code
+/// steps to aim at editor lines and line numbers.
+pub struct ScreenMap {
+    origin: (f64, f64),
+    vv: (f64, f64),
+    pub scale: f64,
+}
+
+impl ScreenMap {
+    pub fn point(&self, x: f64, y: f64) -> (f64, f64) {
+        (self.origin.0 + (x - self.vv.0) * self.scale, self.origin.1 + (y - self.vv.1) * self.scale)
+    }
+}
+
+pub fn screen_map(session: &mut Session, pid: u32) -> Result<ScreenMap, String> {
+    restore_target(pid)?;
+    let g = session.evaluate(
+        "(() => { const vv = window.visualViewport; return { dpr: devicePixelRatio, l: vv ? vv.offsetLeft : 0, t: vv ? vv.offsetTop : 0, s: vv ? vv.scale : 1, w: innerWidth }; })()",
+    )?;
+    let f = |k: &str| g[k].as_f64().unwrap_or(0.0);
+    let (top, _, viewport) = render_widget(pid)?;
+    bring_to_front(top);
+    let expected = f("w") * f("dpr");
+    if (viewport.width - expected).abs() > expected * 0.03 + 2.0 {
+        return Err(format!("content area is {} px wide but the page reports {expected:.0} px: wrong window?", viewport.width));
+    }
+    Ok(ScreenMap { origin: (viewport.x, viewport.y), vv: (f("l"), f("t")), scale: f("s") * f("dpr") })
+}
+
 const PROBE_INSTALL: &str = r#"(() => {
   if (!window.__scenraProbeInstalled) {
     window.__scenraProbeInstalled = true;
@@ -250,6 +283,22 @@ impl std::fmt::Display for ProbeError {
 
 /// Makes the target the foreground window, as a presenter would switch to it. Anything on top
 /// of it (including Scenra's own panel) would otherwise get the cursor and the click.
+/// Puts the target's window in front with keyboard focus, so typed keys and shortcuts reach it.
+/// Fails rather than type into whatever else is in front (a Scenra window, say).
+pub(crate) fn focus_target(pid: u32) -> Result<(), String> {
+    restore_target(pid)?;
+    let (top, _, _) = render_widget(pid)?;
+    for _ in 0..3 {
+        bring_to_front(top);
+        let mut owner = 0u32;
+        unsafe { GetWindowThreadProcessId(GetForegroundWindow(), Some(&mut owner)) };
+        if process_tree(pid).contains(&owner) {
+            return Ok(());
+        }
+    }
+    Err("Couldn't bring the app to the front for typing; click its window, then retry".into())
+}
+
 fn bring_to_front(top: HWND) {
     unsafe {
         // Already in front: nothing to raise, and no settle time to wait out (this runs on every

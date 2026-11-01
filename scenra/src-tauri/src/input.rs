@@ -10,7 +10,7 @@ use windows::Win32::Foundation::POINT;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP,
     KEYEVENTF_UNICODE, MOUSE_EVENT_FLAGS, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN,
-    MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT,
+    MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT,
     SendInput, VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -202,6 +202,47 @@ pub fn type_text(text: &str, cps: f64) -> Result<(), Abort> {
         }
     }
     Ok(())
+}
+
+/// One wheel event. `delta` is in wheel units: 120 is one notch, negative scrolls down. Smaller
+/// deltas are how high-resolution wheels report, so apps that support smooth scrolling (VS Code,
+/// browsers) move by a fraction of a notch.
+pub fn wheel(delta: i32) -> Result<(), Abort> {
+    let _armed = hooks::arm();
+    check()?;
+    let mut event = mouse(MOUSEEVENTF_WHEEL, 0, 0);
+    event.Anonymous.mi.mouseData = delta as u32;
+    send(&[event]);
+    Ok(())
+}
+
+/// Presses `keys` together, like Ctrl+Shift+P: modifiers down in order, then all up in reverse,
+/// with a human beat between.
+pub fn chord(keys: &[VIRTUAL_KEY]) -> Result<(), Abort> {
+    let _armed = hooks::arm();
+    check()?;
+    for vk in keys {
+        send(&[key(*vk, 0, KEYBD_EVENT_FLAGS(0))]);
+        if let Err(abort) = wait(Duration::from_millis(35)) {
+            release_all();
+            return Err(abort);
+        }
+    }
+    let held = wait(Duration::from_millis(60));
+    for vk in keys.iter().rev() {
+        send(&[key(*vk, 0, KEYEVENTF_KEYUP)]);
+    }
+    held
+}
+
+/// Left click with Shift held (extends a selection).
+pub fn shift_click() -> Result<(), Abort> {
+    let _armed = hooks::arm();
+    check()?;
+    send(&[key(VK_SHIFT, 0, KEYBD_EVENT_FLAGS(0))]);
+    let result = wait(Duration::from_millis(40)).and_then(|()| click());
+    send(&[key(VK_SHIFT, 0, KEYEVENTF_KEYUP)]);
+    result
 }
 
 /// Lets go of every button and modifier Scenra might be holding. Used by the emergency stop.

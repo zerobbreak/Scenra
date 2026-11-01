@@ -36,6 +36,8 @@ static PLAYBACK: AtomicBool = AtomicBool::new(false);
 static FOREIGN: AtomicBool = AtomicBool::new(false);
 static EXPECTED_EVENTS: AtomicU64 = AtomicU64::new(0);
 static FOREIGN_EVENTS: AtomicU64 = AtomicU64::new(0);
+/// What the last interfering event was, for diagnosing a stop nobody remembers causing.
+static LAST_FOREIGN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 /// Every key event the guard hook was called for, before any filtering (diagnostics).
 static KEY_EVENTS: AtomicU64 = AtomicU64::new(0);
 /// Called (on its own short-lived thread) when the emergency stop fires.
@@ -154,12 +156,15 @@ unsafe extern "system" fn stop_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
-fn classify(extra: usize) {
+fn classify(extra: usize, what: impl FnOnce() -> String) {
     if extra == TAG {
         EXPECTED_EVENTS.fetch_add(1, Ordering::Relaxed);
     } else if ARMED.load(Ordering::Relaxed) > 0 || PLAYBACK.load(Ordering::Relaxed) {
         FOREIGN_EVENTS.fetch_add(1, Ordering::Relaxed);
         FOREIGN.store(true, Ordering::SeqCst);
+        if let Ok(mut last) = LAST_FOREIGN.try_lock() {
+            *last = Some(what());
+        }
     }
 }
 
@@ -167,7 +172,7 @@ unsafe extern "system" fn guard_mouse_proc(code: i32, wparam: WPARAM, lparam: LP
     if code == HC_ACTION as i32 {
         // Moves, buttons and the wheel all count: any of them means the user has the mouse.
         let mouse = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
-        classify(mouse.dwExtraInfo);
+        classify(mouse.dwExtraInfo, || format!("mouse message 0x{:x} at ({}, {}), extra 0x{:x}", wparam.0, mouse.pt.x, mouse.pt.y, mouse.dwExtraInfo));
     }
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
@@ -182,7 +187,7 @@ unsafe extern "system" fn guard_key_proc(code: i32, wparam: WPARAM, lparam: LPAR
         let modifier = MODIFIERS.contains(&vk);
         track(key);
         if !modifier && vk != VK_ESCAPE.0 {
-            classify(key.dwExtraInfo);
+            classify(key.dwExtraInfo, || format!("key vk 0x{vk:x} flags 0x{:x}, extra 0x{:x}", key.flags.0, key.dwExtraInfo));
         } else if key.dwExtraInfo == TAG {
             EXPECTED_EVENTS.fetch_add(1, Ordering::Relaxed);
         }
@@ -193,7 +198,7 @@ unsafe extern "system" fn guard_key_proc(code: i32, wparam: WPARAM, lparam: LPAR
 /// A key press seen by one of Scenra's own windows, reported by its webview: the keyboard hook is
 /// blind to these. Counted like any untagged event, so it only interrupts while armed.
 pub fn own_window_key() {
-    classify(0);
+    classify(0, || "a key pressed in a Scenra window".to_owned());
 }
 
 pub fn stopped() -> bool {
@@ -225,7 +230,7 @@ impl Drop for Armed {
     }
 }
 
-#[derive(Clone, Copy, serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuardCounts {
     pub expected: u64,
@@ -233,6 +238,7 @@ pub struct GuardCounts {
     pub key_events: u64,
     pub stopped: bool,
     pub interference: bool,
+    pub last_foreign: Option<String>,
 }
 
 pub fn counts() -> GuardCounts {
@@ -242,6 +248,7 @@ pub fn counts() -> GuardCounts {
         key_events: KEY_EVENTS.load(Ordering::Relaxed),
         stopped: stopped(),
         interference: foreign_seen(),
+        last_foreign: LAST_FOREIGN.lock().ok().and_then(|l| l.clone()),
     }
 }
 
@@ -263,9 +270,9 @@ mod tests {
     fn playback_guard_keeps_interference_latched_across_nested_actions() {
         playback_guard(true);
         let outer = arm();
-        classify(TAG);
+        classify(TAG, String::new);
         assert!(!foreign_seen());
-        classify(0);
+        classify(0, String::new);
         assert!(foreign_seen());
         { let _inner = arm(); assert!(foreign_seen()); }
         drop(outer);
@@ -275,7 +282,7 @@ mod tests {
         playback_guard(false);
         playback_guard(true);
         assert!(!foreign_seen());
-        classify(0);
+        classify(0, String::new);
         assert!(foreign_seen());
         playback_guard(false);
         FOREIGN.store(false, Ordering::SeqCst);

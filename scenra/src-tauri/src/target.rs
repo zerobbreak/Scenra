@@ -39,6 +39,8 @@ pub struct LaunchedTarget(Mutex<Option<Running>>);
 struct Running {
     child: Child,
     port: u16,
+    /// Set when the target is VS Code (its CLI and codebase folder are needed for code steps).
+    vscode: Option<crate::vscode::VsCode>,
 }
 
 #[derive(Serialize)]
@@ -118,6 +120,14 @@ fn replace_running(
     state: &LaunchedTarget,
     spawn: impl FnOnce() -> Result<(Child, u16), String>,
 ) -> Result<CapabilityProfile, String> {
+    replace_running_with(state, None, spawn)
+}
+
+fn replace_running_with(
+    state: &LaunchedTarget,
+    vscode: Option<crate::vscode::VsCode>,
+    spawn: impl FnOnce() -> Result<(Child, u16), String>,
+) -> Result<CapabilityProfile, String> {
     let mut slot = state.0.lock().map_err(err)?;
     if let Some(mut previous) = slot.take() {
         let _ = previous.child.kill();
@@ -125,9 +135,72 @@ fn replace_running(
     }
     let (child, port) = spawn()?;
     let profile = detect(child.id(), port);
-    *slot = Some(Running { child, port });
+    *slot = Some(Running { child, port, vscode });
     Ok(profile)
 }
+
+/// Launches VS Code on the codebase `folder` (or the saved one) with Scenra's recording profile
+/// and a debug port. The folder is remembered as the project's codebase.
+#[tauri::command(async)]
+pub fn launch_vscode(
+    app: AppHandle,
+    state: State<'_, LaunchedTarget>,
+    folder: Option<String>,
+) -> Result<CapabilityProfile, String> {
+    let mut settings = crate::settings::load(&app);
+    let folder = match folder.filter(|f| !f.trim().is_empty()) {
+        Some(f) => PathBuf::from(f.trim()),
+        None => settings.codebase_folder.clone().ok_or("Choose the codebase folder to open")?,
+    };
+    if !folder.is_dir() {
+        return Err(format!("{} isn't a folder", folder.display()));
+    }
+    // One spelling of the folder everywhere: backslashes, no `\\?\` prefix.
+    let folder = PathBuf::from(folder.canonicalize().map_err(err)?.to_string_lossy().trim_start_matches(r"\\?\").to_owned());
+    settings.codebase_folder = Some(folder.clone());
+    crate::settings::save(&app, &settings)?;
+    let vs = crate::vscode::VsCode {
+        exe: crate::vscode::find_exe()?,
+        profile: app.path().app_local_data_dir().map_err(err)?.join("targets").join("vscode-profile"),
+        folder,
+    };
+    let spawn_with = vs.clone();
+    replace_running_with(&state, Some(vs), move || {
+        let port = free_port()?;
+        let child = crate::vscode::spawn(&spawn_with, port)?;
+        wait_for_devtools(child, port, "VS Code")
+    })
+}
+
+/// Tests: VS Code on `folder` with a throwaway recording profile.
+#[cfg(test)]
+pub(crate) fn launch_vscode_for_test(folder: &Path, profile: &Path) -> Result<LaunchedTarget, String> {
+    let state = LaunchedTarget::default();
+    let vs = crate::vscode::VsCode { exe: crate::vscode::find_exe()?, profile: profile.to_owned(), folder: folder.to_owned() };
+    let spawn_with = vs.clone();
+    replace_running_with(&state, Some(vs), move || {
+        let port = free_port()?;
+        let child = crate::vscode::spawn(&spawn_with, port)?;
+        wait_for_devtools(child, port, "VS Code")
+    })?;
+    Ok(state)
+}
+
+#[cfg(test)]
+pub(crate) fn stop_for_test(state: &LaunchedTarget) {
+    if let Some(mut running) = state.0.lock().ok().and_then(|mut s| s.take()) {
+        let _ = running.child.kill();
+    }
+}
+
+/// The running target if it's VS Code: process id, debug port and its folder and CLI.
+pub fn vscode(state: &LaunchedTarget) -> Result<(u32, u16, crate::vscode::VsCode), String> {
+    let (pid, port) = running(state)?;
+    let slot = state.0.lock().map_err(err)?;
+    let vs = slot.as_ref().and_then(|r| r.vscode.clone()).ok_or("This step needs VS Code: launch it from Step 3 first")?;
+    Ok((pid, port, vs))
+}
+
 
 /// The debug port of the running target, if it is still alive.
 pub fn running_port(state: &LaunchedTarget) -> Result<u16, String> {
@@ -589,7 +662,7 @@ mod tests {
             crate::page::wait_until_settled(port, Duration::from_secs(15))?;
             let mut page = crate::page::page_session(port)?;
             let baseline = crate::page::initial_state(&mut page)?;
-            let action = |target: &str, word| Action { word, target: target.into(), label: target.into() };
+            let action = |target: &str, word| Action { word, target: target.into(), label: target.into(), step: None };
             let scene = |title: &str, actions| Scene { title: title.into(), lines: vec![Line { text: "Open the control".into(), actions }] };
             let mut scenario = Scenario { title: "Setup regression".into(), warnings: vec![], scenes: vec![
                 scene("Open recording", vec![action("New Recording", 2)]),

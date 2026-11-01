@@ -80,6 +80,13 @@ pub fn prepare_scene(
     take.while_idle(|| {
         checkpoint()?;
         locate::restore_target(pid)?;
+        // A VS Code scene starts at a file, line and panel: restore those directly.
+        if let Some(code) = states.get(scene).and_then(|s| s.code.as_ref()) {
+            crate::steps::restore_state(&targets, code)?;
+            checkpoint()?;
+            check_scene(port, &scenario, &states, scene)?;
+            return Ok(SetupResult { actions_run: 0 });
+        }
         replay_to_start(port, &scenario, &states, scene, checkpoint)
     })
 }
@@ -109,7 +116,7 @@ fn check_scene(port: u16, scenario: &Scenario, states: &[page::InitialState], sc
     let expected = states.get(scene).ok_or("This scene has no approved starting state")?;
     let mut page = page::page_session(port)?;
     page::check_initial(expected, &page::initial_state(&mut page)?)?;
-    if let Some(action) = ordered_actions(selected).first() { page::check_control(&mut page, &action.target)?; }
+    if let Some(action) = ordered_actions(selected).first().filter(|a| a.step.is_none()) { page::check_control(&mut page, &action.target)?; }
     Ok(())
 }
 
@@ -159,9 +166,9 @@ pub(crate) fn replay_to_start(
 mod tests {
     use super::*;
     fn scenario_with_actions(count: usize) -> (Scenario, Vec<page::InitialState>) {
-        let action = Action { word: 0, target: "Open".into(), label: "Open".into() };
+        let action = Action { word: 0, target: "Open".into(), label: "Open".into(), step: None };
         let scene = crate::ai::Scene { title: "Scene".into(), lines: vec![crate::ai::Line { text: "Open".into(), actions: vec![action; count] }] };
-        let state = page::InitialState { url: "http://localhost/".into(), headings: vec![], dialogs: vec![] };
+        let state = page::InitialState { url: "http://localhost/".into(), headings: vec![], dialogs: vec![], code: None };
         (Scenario { title: "Test".into(), scenes: vec![scene.clone(), scene], warnings: vec![] }, vec![state.clone(), state])
     }
     #[test]
@@ -199,8 +206,8 @@ mod tests {
     fn clicks_follow_narration_order_inside_each_line() {
         let scene = crate::ai::Scene { title: "Setup".into(), lines: vec![crate::ai::Line {
             text: "a b c".into(), actions: vec![
-                Action { word: 2, target: "Second".into(), label: "".into() },
-                Action { word: 0, target: "First".into(), label: "".into() },
+                Action { word: 2, target: "Second".into(), label: "".into(), step: None },
+                Action { word: 0, target: "First".into(), label: "".into(), step: None },
             ],
         }] };
         assert_eq!(ordered_actions(&scene).iter().map(|a| a.target.as_str()).collect::<Vec<_>>(), vec!["First", "Second"]);

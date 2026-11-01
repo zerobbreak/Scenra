@@ -477,7 +477,7 @@ mod tests {
     use super::*;
 
     fn state(url: &str) -> InitialState {
-        InitialState { url: url.into(), headings: vec!["Recordings".into()], dialogs: vec![] }
+        InitialState { url: url.into(), headings: vec!["Recordings".into()], dialogs: vec![], code: None }
     }
 
     fn raw(at: f64, kind: &str, label: &str, unique: bool) -> RawClick {

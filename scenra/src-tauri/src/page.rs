@@ -47,9 +47,14 @@ const OUTLINE_JS: &str = r#"(() => {
 pub fn page_session(port: u16) -> Result<Session, String> {
     let page = cdp::targets(port)?
         .into_iter()
-        .find(|t| t.kind == "page" && t.url.starts_with("http"))
+        .find(|t| t.kind == "page" && is_app_page(&t.url))
         .ok_or("no web page is open in the target")?;
     Session::connect(&page.web_socket_debugger_url)
+}
+
+/// A web page, or VS Code's workbench (the Electron page that is the whole VS Code window).
+pub fn is_app_page(url: &str) -> bool {
+    url.starts_with("http") || (url.starts_with("vscode-file://") && url.contains("/workbench/workbench"))
 }
 
 pub fn outline(session: &mut Session) -> Result<PageOutline, String> {
@@ -142,16 +147,50 @@ pub struct InitialState {
     pub url: String,
     pub headings: Vec<String>,
     pub dialogs: Vec<String>,
+    /// For VS Code: what the editor shows (docs/adr/0003-code-navigation.md).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<CodeState>,
 }
+
+/// Where VS Code is: the open file (as its `file:` URI), the top visible line, and the side
+/// panel ("Explorer", "Search"…, or "" when it's closed).
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct CodeState {
+    pub uri: Option<String>,
+    pub top: Option<u32>,
+    pub panel: String,
+}
+
+/// Lines the editor may be off by and still count as the same starting place.
+const TOP_TOLERANCE: u32 = 2;
 
 /// A JS function returning the page's [`InitialState`]. Teach mode calls the same function in the
 /// page just before each click, so taught states compare equal to ones read here.
 pub(crate) const INITIAL_STATE_FN: &str = r#"() => {
       const visible = e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
       const clean = e => (e.innerText || e.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().slice(0,120);
+      const dialogs = [...document.querySelectorAll('dialog[open],[role=dialog],[aria-modal=true]')].filter(visible).map(clean);
+      if (document.querySelector('.monaco-workbench')) {
+        // VS Code: the workbench URL is the same for every file, so describe the editor instead.
+        const ed = document.querySelector('.editor-group-container.active .editor-instance .monaco-editor')
+          || document.querySelector('.editor-instance .monaco-editor');
+        let top = null;
+        if (ed) {
+          const g = (ed.querySelector('.overflow-guard') || ed).getBoundingClientRect();
+          const nums = [...ed.querySelectorAll('.margin-view-overlays .line-numbers')]
+            .map((n) => ({ line: +n.textContent, r: n.getBoundingClientRect() }))
+            .filter((n) => n.line > 0 && n.r.height > 0 && n.r.top >= g.top - 1).sort((a, b) => a.r.top - b.r.top);
+          top = nums.length ? nums[0].line : null;
+        }
+        const side = document.querySelector('.part.sidebar');
+        const panel = side && side.offsetParent !== null
+          ? ((side.querySelector('.composite.title h2') || {}).textContent || '').trim() : '';
+        return { url: 'vscode://workbench', headings: [], dialogs,
+          code: { uri: ed ? ed.getAttribute('data-uri') : null, top, panel } };
+      }
       return { url: location.href,
         headings: [...document.querySelectorAll('h1,h2,h3')].filter(visible).map(clean),
-        dialogs: [...document.querySelectorAll('dialog[open],[role=dialog],[aria-modal=true]')].filter(visible).map(clean) };
+        dialogs };
     }"#;
 
 pub fn initial_state(session: &mut Session) -> Result<InitialState, String> {
@@ -159,6 +198,29 @@ pub fn initial_state(session: &mut Session) -> Result<InitialState, String> {
 }
 
 pub fn check_initial(expected: &InitialState, actual: &InitialState) -> Result<(), String> {
+    if let Some(want) = &expected.code {
+        let have = actual.code.as_ref().ok_or("VS Code isn't the app in front: the scene starts in VS Code")?;
+        let same_file = match (&want.uri, &have.uri) {
+            (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+            (a, b) => a == b,
+        };
+        if !same_file {
+            return Err("VS Code shows a different file than the scene starts on.".into());
+        }
+        if let (Some(a), Some(b)) = (want.top, have.top)
+            && a.abs_diff(b) > TOP_TOLERANCE
+        {
+            return Err(format!("VS Code is scrolled to line {b}; the scene starts at line {a}."));
+        }
+        if want.panel != have.panel {
+            let name = |p: &str| if p.is_empty() { "closed".to_owned() } else { format!("“{p}”") };
+            return Err(format!("The side panel is {}; the scene starts with it {}.", name(&have.panel), name(&want.panel)));
+        }
+        if actual.dialogs != expected.dialogs {
+            return Err("A VS Code dialog differs from the scene's starting state. Close it.".into());
+        }
+        return Ok(());
+    }
     if actual.url != expected.url {
         return Err("The page has navigated away from the script starting page.".into());
     }
@@ -176,9 +238,12 @@ pub fn check_control(session: &mut Session, label: &str) -> Result<(), String> {
     let expression = format!(r#"(() => {{
       const clean = s => (s || '').replace(/\s+/g,' ').trim().toLowerCase();
       const label = clean({});
-      const matches = [...document.querySelectorAll('a[href],button,[role=button]')]
+      // The same controls and names the locator uses, VS Code's explorer rows and tabs included.
+      const code = !!document.querySelector('.monaco-workbench');
+      const named = e => /^(treeitem|tab|menuitem|option)$/.test(e.getAttribute('role') || '');
+      const matches = [...document.querySelectorAll('a[href],button,[role=button]' + (code ? ',[role=treeitem],[role=tab],[role=menuitem],[role=option]' : ''))]
         .filter(e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden'
-          && clean(e.innerText || e.getAttribute('aria-label')) === label);
+          && clean(named(e) ? (e.getAttribute('aria-label') || e.innerText) : (e.innerText || e.getAttribute('aria-label'))) === label);
       if (matches.length !== 1) return false;
       const e = matches[0], r = e.getBoundingClientRect();
       if (e.disabled || e.getAttribute('aria-disabled') === 'true') return false;
@@ -261,7 +326,7 @@ pub fn setup_click(session: &mut Session, label: &str, checkpoint: &impl Fn() ->
 mod initial_tests {
     use super::*;
     fn baseline() -> InitialState {
-        InitialState { url: "http://localhost/demo".into(), headings: vec!["Dashboard".into()], dialogs: vec![] }
+        InitialState { url: "http://localhost/demo".into(), headings: vec!["Dashboard".into()], dialogs: vec![], code: None }
     }
     #[test]
     fn rejects_navigation_dialog_and_heading_changes() {

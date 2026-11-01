@@ -17,11 +17,13 @@ pub struct Settings {
     pub sessions_dir: Option<std::path::PathBuf>,
     /// Whether narration may be sent to Gemini to transcribe it (editor AI features).
     pub transcription: crate::editor::transcript::Consent,
+    /// The codebase VS Code opens for code scenes (docs/adr/0003-code-navigation.md).
+    pub codebase_folder: Option<std::path::PathBuf>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { overlay_zoom: 1.0, capture_monitor: None, sessions_dir: None, transcription: Default::default() }
+        Self { overlay_zoom: 1.0, capture_monitor: None, sessions_dir: None, transcription: Default::default(), codebase_folder: None }
     }
 }
 
