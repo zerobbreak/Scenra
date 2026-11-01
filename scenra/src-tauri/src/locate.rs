@@ -112,8 +112,10 @@ fn find_js(selector: &Selector) -> String {
             r#"(() => {{
               const clean = (s) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
               const full = clean({label});
-              // Tree items and tabs too: VS Code's explorer rows and editor tabs are found by name.
-              const els = [...document.querySelectorAll('a[href],button,[role=button],input,textarea,select,[role=treeitem],[role=tab],[role=menuitem],[role=option]')]
+              // In VS Code, tree items and tabs too: explorer rows and editor tabs are found by name.
+              // Web pages keep the rule Teach and the scene check use.
+              const code = !!document.querySelector('.monaco-workbench');
+              const els = [...document.querySelectorAll('a[href],button,[role=button],input,textarea,select' + (code ? ',[role=treeitem],[role=tab],[role=menuitem],[role=option]' : ''))]
                 .filter((e) => e.offsetParent !== null);
               const named = (e) => /^(treeitem|tab|menuitem|option)$/.test(e.getAttribute('role') || '');
               const text = (e) => clean(named(e) ? (e.getAttribute('aria-label') || e.innerText) : (e.innerText || e.getAttribute('aria-label') || e.placeholder));

@@ -15,7 +15,7 @@ use crate::vscode::{self, VsCode};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use windows::Win32::UI::Input::KeyboardAndMouse::{VK_A, VK_B, VK_CONTROL, VK_D, VK_E, VK_F, VK_G, VK_P, VK_RETURN, VK_SHIFT, VK_X};
+use windows::Win32::UI::Input::KeyboardAndMouse::{VK_A, VK_B, VK_CONTROL, VK_D, VK_E, VK_F, VK_G, VK_K, VK_P, VK_RETURN, VK_SHIFT, VK_W, VK_X};
 
 /// Lines per second while scrolling at cruising speed.
 const SCROLL_SPEED: f64 = 15.0;
@@ -295,14 +295,24 @@ pub fn restore_state(targets: &LaunchedTarget, want: &page::CodeState) -> Result
         let session = &mut c.session;
         wait_until(Duration::from_secs(8), || Ok(read_view(session).is_ok_and(|v| v.shows(&file))), "open the file")?;
         std::thread::sleep(Duration::from_millis(400));
-        // Correct for the real height once the file is showing.
+        // Correct for the real height once the file is showing. VS Code only scrolls to a line
+        // that's off screen, so first move well away from it, then come back.
         if let Some(have) = read_view(&mut c.session)?.top()
             && (have.round() as i64 - i64::from(top)).abs() > 1
         {
             let rows = read_view(&mut c.session)?.rows();
+            let away = if f64::from(top) > rows * 2.0 { 1 } else { top + (rows * 3.0) as u32 };
+            vscode::goto(&c.vs, &file, away)?;
+            std::thread::sleep(Duration::from_millis(400));
             vscode::goto(&c.vs, &file, (f64::from(top) + rows / 2.0) as u32)?;
             std::thread::sleep(Duration::from_millis(400));
         }
+    } else if want.uri.is_none() && read_view(&mut c.session).is_ok() {
+        // The scene starts with no file open: Close All Editors (Ctrl+K Ctrl+W).
+        input::chord(&[VK_CONTROL, VK_K]).map_err(abort)?;
+        input::chord(&[VK_CONTROL, VK_W]).map_err(abort)?;
+        let session = &mut c.session;
+        wait_until(Duration::from_secs(5), || Ok(read_view(session).is_err()), "close the open files")?;
     }
     let panel = |s: &mut Session| -> Result<String, String> {
         Ok(s.evaluate("(() => { const p = document.querySelector('.part.sidebar'); return p && p.offsetParent !== null ? ((p.querySelector('.composite.title h2') || {}).textContent || '').trim() : ''; })()")?
@@ -548,6 +558,19 @@ pub fn enclosing_symbol(text: &str, line: u32) -> Option<String> {
     None
 }
 
+/// `file` as a `/`-separated path inside `folder`, matching whole path components (so
+/// `C:\dev\app2\x.rs` isn't inside `C:\dev\app`), ignoring case and slash direction.
+fn relative_to(folder: &Path, file: &Path) -> Option<String> {
+    let parts = |p: &Path| -> Vec<String> {
+        p.to_string_lossy().split(['\\', '/']).filter(|s| !s.is_empty()).map(str::to_owned).collect()
+    };
+    let (folder, file) = (parts(folder), parts(file));
+    if file.len() <= folder.len() || !folder.iter().zip(&file).all(|(a, b)| a.to_lowercase() == b.to_lowercase()) {
+        return None;
+    }
+    Some(file[folder.len()..].join("/"))
+}
+
 /// Reads VS Code's open file and selection (or cursor line) into a step position.
 #[tauri::command(async)]
 pub fn capture_code_position(targets: tauri::State<'_, LaunchedTarget>) -> Result<Position, String> {
@@ -557,13 +580,7 @@ pub fn capture_code_position(targets: tauri::State<'_, LaunchedTarget>) -> Resul
         return Err("Open a file in VS Code first".into());
     }
     let file = v["uri"].as_str().and_then(uri_to_path).ok_or("VS Code's open file isn't on disk")?;
-    let folder = c.vs.folder.to_string_lossy().to_lowercase();
-    let full = file.to_string_lossy().into_owned();
-    let relative = full
-        .get(folder.len()..)
-        .filter(|_| full.to_lowercase().starts_with(&folder))
-        .map(|r| r.trim_start_matches('\\').replace('\\', "/"))
-        .ok_or("That file isn't inside the codebase folder")?;
+    let relative = relative_to(&c.vs.folder, &file).ok_or("That file isn't inside the codebase folder")?;
     let selected: Vec<u32> = v["selected"].as_array().into_iter().flatten().filter_map(|n| n.as_u64()).map(|n| n as u32).collect();
     let (first, lines) = match (selected.iter().min(), selected.iter().max()) {
         (Some(a), Some(b)) => (*a, b - a + 1),
@@ -577,6 +594,15 @@ pub fn capture_code_position(targets: tauri::State<'_, LaunchedTarget>) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relative_paths_need_a_whole_folder_match() {
+        let f = Path::new(r"C:\dev\app");
+        assert_eq!(relative_to(f, Path::new(r"c:\Dev\App\src\x.rs")).as_deref(), Some("src/x.rs"));
+        assert_eq!(relative_to(Path::new("C:/dev/app/"), Path::new(r"C:\dev\app\x.rs")).as_deref(), Some("x.rs"));
+        assert_eq!(relative_to(f, Path::new(r"C:\dev\app2\src\x.rs")), None);
+        assert_eq!(relative_to(f, Path::new(r"C:\dev\app")), None);
+    }
 
     const CODE: &str = "fn a() {\n    let x = 1;\n}\n\nfn b() {\n    let x = 1;\n    done();\n}\n";
 

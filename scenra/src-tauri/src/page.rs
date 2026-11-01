@@ -238,9 +238,12 @@ pub fn check_control(session: &mut Session, label: &str) -> Result<(), String> {
     let expression = format!(r#"(() => {{
       const clean = s => (s || '').replace(/\s+/g,' ').trim().toLowerCase();
       const label = clean({});
-      const matches = [...document.querySelectorAll('a[href],button,[role=button]')]
+      // The same controls and names the locator uses, VS Code's explorer rows and tabs included.
+      const code = !!document.querySelector('.monaco-workbench');
+      const named = e => /^(treeitem|tab|menuitem|option)$/.test(e.getAttribute('role') || '');
+      const matches = [...document.querySelectorAll('a[href],button,[role=button]' + (code ? ',[role=treeitem],[role=tab],[role=menuitem],[role=option]' : ''))]
         .filter(e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden'
-          && clean(e.innerText || e.getAttribute('aria-label')) === label);
+          && clean(named(e) ? (e.getAttribute('aria-label') || e.innerText) : (e.innerText || e.getAttribute('aria-label'))) === label);
       if (matches.length !== 1) return false;
       const e = matches[0], r = e.getBoundingClientRect();
       if (e.disabled || e.getAttribute('aria-disabled') === 'true') return false;

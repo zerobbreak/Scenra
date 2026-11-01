@@ -158,8 +158,8 @@ export default function ScriptPanel() {
       </div>
 
       {editing && (
+        // Starts from the script when opened; a script change elsewhere mustn't wipe an unsaved draft.
         <ScriptEditor
-          key={script ? JSON.stringify(script) : "new"}
           initial={script}
           onSaved={(saved) => {
             setScript(saved);
