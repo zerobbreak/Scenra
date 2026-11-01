@@ -87,6 +87,11 @@ impl Score {
 /// Sounds that are never part of a script.
 const FILLER_SOUNDS: [&str; 8] = ["um", "uh", "er", "erm", "uhm", "hmm", "mm", "ah"];
 
+/// Whether `word` is a hesitation sound (um, uh…) rather than a word.
+pub fn is_filler_sound(word: &str) -> bool {
+    FILLER_SOUNDS.contains(&bare(word).as_str())
+}
+
 /// Returns, per word, whether it's part of a stumble to cut. No one signal is trusted alone:
 /// - filler sounds (um, uh…) always;
 /// - words Gemini flags, unless the script needs them ("start a, a new" keeps one "a");

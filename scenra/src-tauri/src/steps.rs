@@ -90,10 +90,9 @@ pub fn find_anchor(text: &str, at: &Anchor) -> Result<u32, String> {
     if candidates.is_empty() {
         return Err(format!("“{wanted}” is no longer in the file; update the step"));
     }
-    // Within the named symbol (its nearest preceding mention within 300 lines), if there is one.
-    let in_symbol = |i: usize| {
-        at.symbol.as_ref().is_some_and(|s| lines[i.saturating_sub(300)..=i].iter().rev().any(|l| l.contains(s.as_str())))
-    };
+    // Inside the named symbol: the declaration enclosing the candidate is exactly that one, found
+    // the same way the anchor's symbol was captured.
+    let in_symbol = |i: usize| at.symbol.is_some() && enclosing_symbol(text, i as u32 + 1) == at.symbol;
     let hint = at.line.saturating_sub(1) as i64;
     let best = candidates
         .iter()
@@ -258,8 +257,23 @@ pub fn approach(targets: &LaunchedTarget, step: &Step, pace: Pace) -> Result<(),
             }
             Ok(())
         }
+        // Walking the codebase for a same-named file can take a moment: do it before the word.
+        Step::Open { path, instant: false, .. } => {
+            let (_, _, vs) = target::vscode(targets)?;
+            let file = vscode::resolve(&vs.folder, path)?;
+            let unique = unique_name(&vs.folder, &file_name(&file));
+            *UNIQUE.lock().map_err(err)? = Some((file, unique));
+            Ok(())
+        }
         _ => Ok(()),
     }
+}
+
+/// The last Open step's file and whether its name is unique, worked out in `approach`.
+static UNIQUE: std::sync::Mutex<Option<(PathBuf, bool)>> = std::sync::Mutex::new(None);
+
+fn file_name(file: &Path) -> String {
+    file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
 pub fn run(targets: &LaunchedTarget, step: &Step, pace: Pace) -> Result<(), String> {
@@ -345,18 +359,29 @@ fn open(c: &mut Ctx, path: &str, line: Option<u32>, instant: bool) -> Result<(),
     } else {
         input::chord(&[VK_CONTROL, VK_P]).map_err(abort)?;
         wait_until(Duration::from_secs(3), || quick_input_open(&mut c.session), "open Quick Open")?;
-        let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = file_name(&file);
+        let cached = UNIQUE.lock().map_err(err)?.take().filter(|(f, _)| *f == file).map(|(_, u)| u);
+        let unique = cached.unwrap_or_else(|| unique_name(&c.vs.folder, &name));
         // The file name alone reads best; the relative path when the name isn't unique.
-        let typed = if unique_name(&c.vs.folder, &name) { name } else { path.replace('\\', "/") };
+        let typed = if unique { name.clone() } else { path.replace('\\', "/") };
         input::type_text(&typed, TYPE_CPS).map_err(abort)?;
         // Quick Open searches as you type; on a big or freshly opened codebase the results lag.
-        // Only press Enter once the top result is the file.
-        let wanted = file.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
-        let top_js = "(() => { const r = document.querySelector('.quick-input-widget .monaco-list-row'); return r ? (r.getAttribute('aria-label') || r.innerText || '') : ''; })()";
+        // Only press Enter once the top result is the file: its name, and its folder too when
+        // another file has the same name.
+        let folder = relative_to(&c.vs.folder, &file)
+            .and_then(|r| r.rsplit_once('/').map(|(dir, _)| dir.to_lowercase()))
+            .unwrap_or_default();
+        let top_js = "(() => { const r = document.querySelector('.quick-input-widget .monaco-list-row'); if (!r) return null; \
+            const t = (sel) => ((r.querySelector(sel) || {}).textContent || '').trim(); \
+            return { name: t('.label-name'), dir: t('.label-description') }; })()";
         let session = &mut c.session;
         wait_until(
             Duration::from_secs(12),
-            || Ok(session.evaluate(top_js)?.as_str().unwrap_or_default().to_lowercase().starts_with(&wanted)),
+            || {
+                let top = session.evaluate(top_js)?;
+                let (got_name, got_dir) = (top["name"].as_str().unwrap_or_default(), top["dir"].as_str().unwrap_or_default());
+                Ok(got_name.eq_ignore_ascii_case(&name) && (unique || got_dir.replace('\\', "/").to_lowercase() == folder))
+            },
             "find the file in Quick Open",
         )?;
         std::thread::sleep(Duration::from_millis(200));
@@ -387,7 +412,8 @@ fn unique_name(folder: &Path, name: &str) -> bool {
             }
             let path = entry.path();
             let file_name = entry.file_name();
-            if path.is_dir() {
+            // The entry's own type: symlinks and junctions aren't followed, so a loop can't trap the walk.
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
                 if !SKIP.iter().any(|s| file_name == *s) {
                     stack.push(path);
                 }
@@ -540,7 +566,9 @@ const SELECTION_JS: &str = r#"(() => {
   const lineOf = (d) => tops.get(d.style.top);
   const selected = rows.filter((d) => d.querySelector('.selected-text')).map(lineOf).filter(Boolean);
   const current = rows.filter((d) => d.querySelector('.current-line')).map(lineOf).filter(Boolean);
-  return { uri: ed.getAttribute('data-uri'), selected, current: current[0] || null };
+  const shown = [...tops.values()];
+  return { uri: ed.getAttribute('data-uri'), selected, current: current[0] || null,
+    shown: shown.length ? [Math.min(...shown), Math.max(...shown)] : null };
 })()"#;
 
 /// The name of the function or type around `line` (1-based), from the nearest declaration above it.
@@ -556,6 +584,13 @@ pub fn enclosing_symbol(text: &str, line: u32) -> Option<String> {
         }
     }
     None
+}
+
+/// Whether a selection may go on past the rows VS Code renders (`shown`, first and last line):
+/// it reaches an edge row and the file continues beyond it. VS Code only renders visible rows,
+/// so the rest of such a selection can't be read.
+fn runs_off_screen(selected: &[u32], shown: (u32, u32), file_lines: u32) -> bool {
+    (shown.0 > 1 && selected.contains(&shown.0)) || (shown.1 < file_lines && selected.contains(&shown.1))
 }
 
 /// `file` as a `/`-separated path inside `folder`, matching whole path components (so
@@ -582,11 +617,17 @@ pub fn capture_code_position(targets: tauri::State<'_, LaunchedTarget>) -> Resul
     let file = v["uri"].as_str().and_then(uri_to_path).ok_or("VS Code's open file isn't on disk")?;
     let relative = relative_to(&c.vs.folder, &file).ok_or("That file isn't inside the codebase folder")?;
     let selected: Vec<u32> = v["selected"].as_array().into_iter().flatten().filter_map(|n| n.as_u64()).map(|n| n as u32).collect();
+    let text = std::fs::read_to_string(&file).map_err(err)?;
+    let shown = v["shown"].as_array().and_then(|r| Some((r.first()?.as_u64()? as u32, r.get(1)?.as_u64()? as u32)));
+    if let Some(shown) = shown
+        && runs_off_screen(&selected, shown, text.lines().count() as u32)
+    {
+        return Err("The selection runs past the edge of the editor. Scroll so all of it shows, then try again".into());
+    }
     let (first, lines) = match (selected.iter().min(), selected.iter().max()) {
         (Some(a), Some(b)) => (*a, b - a + 1),
         _ => (v["current"].as_u64().ok_or("Put the cursor on a line or select some lines in VS Code")? as u32, 1),
     };
-    let text = std::fs::read_to_string(&file).map_err(err)?;
     let anchor_text = text.lines().nth(first as usize - 1).unwrap_or_default().trim().to_owned();
     Ok(Position { path: relative, at: Anchor { line: first, text: anchor_text, symbol: enclosing_symbol(&text, first) }, lines })
 }
@@ -594,6 +635,17 @@ pub fn capture_code_position(targets: tauri::State<'_, LaunchedTarget>) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selections_reaching_a_hidden_edge_are_refused() {
+        // Rows 86–120 of a 500-line file are rendered.
+        assert!(!runs_off_screen(&[90, 91, 92], (86, 120), 500));
+        assert!(runs_off_screen(&[86, 87], (86, 120), 500));
+        assert!(runs_off_screen(&[119, 120], (86, 120), 500));
+        // The file's own first and last lines have nothing beyond them.
+        assert!(!runs_off_screen(&[1, 2], (1, 35), 500));
+        assert!(!runs_off_screen(&[29, 30], (1, 30), 30));
+    }
 
     #[test]
     fn relative_paths_need_a_whole_folder_match() {
@@ -698,6 +750,9 @@ class Foo:
         assert_eq!(find_anchor(CODE, &at(1, "let x = 1;", Some("fn b"))), Ok(6));
         assert_eq!(find_anchor(CODE, &at(2, "let x = 1;", None)), Ok(2));
         assert_eq!(find_anchor(CODE, &at(9, "let x = 1;", None)), Ok(6));
+        // `fn stop` is not `fn stop_take`, even though one name contains the other.
+        let code = "fn stop() {\n    let x = 1;\n}\nfn stop_take() {\n    let x = 1;\n}\n";
+        assert_eq!(find_anchor(code, &at(5, "let x = 1;", Some("fn stop"))), Ok(2));
     }
 
     #[test]

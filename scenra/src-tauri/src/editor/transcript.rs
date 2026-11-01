@@ -154,7 +154,8 @@ pub fn snap(mut words: Vec<Word>, speech: &[(f64, f64)]) -> Vec<Word> {
     words
 }
 
-fn key(wav: &Path) -> Option<(u64, u64)> {
+/// A recording's size and modified time (s): what caches made from it check before reuse.
+pub fn key(wav: &Path) -> Option<(u64, u64)> {
     let meta = std::fs::metadata(wav).ok()?;
     let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
     Some((meta.len(), modified))
