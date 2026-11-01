@@ -115,6 +115,8 @@ join a waitlist, buy or submit anything. Use only facts visible in the outline."
 const SYSTEM_ALIGN: &str = "You write narration scripts for screen-recorded software demos. \
 The presenter already clicked through the workflow once; you get those clicks as ordered steps, \
 each with the control's label and the headings and dialogs visible just before it. \
+In a code editor a step's label says what happens instead (\"Open take.rs\", \"Highlight take.rs 120–131\", \
+\"Search “fn stop”\"); narrate those as moments of a code walkthrough, without guessing what the code does. \
 The presenter reads your script aloud from a teleprompter while Scenra repeats the clicks. \
 Write in a warm, plain, spoken voice, first person plural (\"let's\"). \
 Every line is one short spoken sentence of 6 to 14 words. \
@@ -399,11 +401,15 @@ fn resolve_aligned(draft: Draft, steps: &[TeachStep]) -> Result<Aligned, String>
                     )),
                     None => problems.push(format!("“{}” is narrated twice", step.label)),
                 }
-                actions.push(Action {
-                    word,
-                    target: step.label.clone(),
-                    label: format!("Click {}", title_case(&short(&step.label))),
-                    step: None,
+                actions.push(match &step.step {
+                    // A VS Code step replays as itself; its label already reads "Open take.rs".
+                    Some(code) => Action { word, target: String::new(), label: step.label.clone(), step: Some(code.clone()) },
+                    None => Action {
+                        word,
+                        target: step.label.clone(),
+                        label: format!("Click {}", title_case(&short(&step.label))),
+                        step: None,
+                    },
                 });
             }
             resolved.push(Line { text: line.text, actions });
@@ -559,6 +565,7 @@ mod tests {
                 before: crate::page::InitialState { url: "http://localhost/secret-path".into(), headings: vec![format!("H{index}")], dialogs: vec![], code: None },
                 // An empty label stands for a click into a field.
                 flags: if label.is_empty() { vec![crate::teach::StepFlag::Field] } else { vec![] },
+                step: None,
             })
             .collect()
     }
@@ -578,6 +585,17 @@ mod tests {
 
     fn aligned(scenes: Vec<DraftScene>, steps: &[TeachStep]) -> Result<Aligned, String> {
         resolve_aligned(Draft { title: "Tour".into(), scenes }, steps)
+    }
+
+    #[test]
+    fn taught_code_steps_replay_as_code_steps() {
+        let mut steps = taught(&["Open take.rs", "Settings"]);
+        let open = crate::steps::Step::Open { path: "src/take.rs".into(), line: None, instant: false };
+        steps[0].step = Some(open.clone());
+        let result = aligned(vec![scene("Code", &[("Let's open the take module, then settings.", &[("open", "s0"), ("settings", "s1")])])], &steps).unwrap();
+        let actions = &result.scenario.scenes[0].lines[0].actions;
+        assert_eq!((actions[0].label.as_str(), actions[0].target.as_str(), actions[0].step.as_ref()), ("Open take.rs", "", Some(&open)));
+        assert_eq!((actions[1].label.as_str(), actions[1].step.as_ref()), ("Click Settings", None));
     }
 
     #[test]

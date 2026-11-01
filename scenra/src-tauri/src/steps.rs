@@ -174,7 +174,7 @@ fn read_view(session: &mut Session) -> Result<View, String> {
 }
 
 /// `file:///c%3A/dev/x.rs` → `c:\dev\x.rs`.
-fn uri_to_path(uri: &str) -> Option<PathBuf> {
+pub(crate) fn uri_to_path(uri: &str) -> Option<PathBuf> {
     let rest = uri.strip_prefix("file:///")?;
     let mut out = Vec::new();
     let bytes = rest.as_bytes();
@@ -589,13 +589,13 @@ pub fn enclosing_symbol(text: &str, line: u32) -> Option<String> {
 /// Whether a selection may go on past the rows VS Code renders (`shown`, first and last line):
 /// it reaches an edge row and the file continues beyond it. VS Code only renders visible rows,
 /// so the rest of such a selection can't be read.
-fn runs_off_screen(selected: &[u32], shown: (u32, u32), file_lines: u32) -> bool {
+pub(crate) fn runs_off_screen(selected: &[u32], shown: (u32, u32), file_lines: u32) -> bool {
     (shown.0 > 1 && selected.contains(&shown.0)) || (shown.1 < file_lines && selected.contains(&shown.1))
 }
 
 /// `file` as a `/`-separated path inside `folder`, matching whole path components (so
 /// `C:\dev\app2\x.rs` isn't inside `C:\dev\app`), ignoring case and slash direction.
-fn relative_to(folder: &Path, file: &Path) -> Option<String> {
+pub(crate) fn relative_to(folder: &Path, file: &Path) -> Option<String> {
     let parts = |p: &Path| -> Vec<String> {
         p.to_string_lossy().split(['\\', '/']).filter(|s| !s.is_empty()).map(str::to_owned).collect()
     };

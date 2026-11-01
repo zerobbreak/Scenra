@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import Button from "./Button";
 import { Scenario } from "./script";
 import {
-  FLAG_TEXT, TeachSession, TeachStep, deleteTeachStep, draftFromTeach, onTeachStep, startTeach, stopTeach, teachState,
+  FLAG_TEXT, TeachSession, TeachStep, deleteTeachStep, draftFromTeach, onTeachStep, startTeach, stepText, stopTeach, teachState,
 } from "./teach";
 
 // Teach mode: click through the workflow once by hand, then let Gemini narrate exactly those clicks.
@@ -76,7 +76,12 @@ export default function TeachPanel(props: {
         </Button>
       </div>
 
-      {active && <p className="text-emerald-300">Teaching: click through the app now, then press Stop teaching.</p>}
+      {active && (
+        <p className="text-emerald-300">
+          Teaching: click through the app now, then press Stop teaching. In VS Code, open files, scroll, select lines,
+          run palette commands or search.
+        </p>
+      )}
 
       {steps.length > 0 && (
         <ol className="space-y-1" aria-label="Taught steps">
@@ -85,7 +90,7 @@ export default function TeachPanel(props: {
               <span className="w-6 shrink-0 text-right text-zinc-500">{step.index + 1}.</span>
               <span className="min-w-0 flex-1">
                 <span className={step.flags.length ? "text-zinc-400" : ""}>
-                  {step.label ? `Click “${step.label}”` : step.flags.includes("field") ? "Click into a field" : "Click"}
+                  {stepText(step)}
                 </span>
                 {step.flags.length > 0 && (
                   <span className="block text-xs text-amber-300">
