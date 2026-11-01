@@ -5,7 +5,7 @@
 //! The flag needs Windows 10 2004 (build 19041); older builds treat it like `WDA_MONITOR`
 //! and capture a black box instead.
 //!
-//! OBS is the real gate (see docs/phase0/01-capture-exclusion.md). `probe_capture` is a
+//! The capture matrix (`matrix.rs`) is the real gate (see docs/phase0/01-capture-exclusion.md). `probe_capture` is a
 //! quick self-check: it grabs the teleprompter's screen rect with GDI `BitBlt` and counts
 //! pixels of the magenta marker band the teleprompter draws. Marker found = window leaks.
 

@@ -1,6 +1,6 @@
 # Scenra — Project Outline
 
-> A personal recording director for software demos, focused on apps you build yourself. You teach Scenra a workflow once, it pairs your actions with your voice-over script, and then it replays the workflow with natural cursor movement while you narrate and OBS records each scene.
+> A personal recording director for software demos, focused on apps you build yourself. You teach Scenra a workflow once, it pairs your actions with your voice-over script, and then it replays the workflow with natural cursor movement while you narrate and Scenra records each scene.
 
 Status: **Phase 0 complete (2026-10-21) → Phase 1 MVP**. Remaining uncertainties are to be resolved by implementation and measurement, not more planning.
 
@@ -22,9 +22,9 @@ Status: **Phase 0 complete (2026-10-21) → Phase 1 MVP**. Remaining uncertainti
 | Narration sync | Separate narration and automation state machines; configurable per step; **manual checkpoints by default** |
 | Take control | Global hotkeys + independent emergency stop |
 | Unexpected input | Pause automation, mark take `needs_review`. Scenra tags its own injected input |
-| Capture | OBS display/region capture; teleprompter excluded via `WDA_EXCLUDEFROMCAPTURE` (to be proven in Phase 0) |
+| Capture | Built-in recorder: Windows.Graphics.Capture of one monitor (region later); teleprompter excluded via `WDA_EXCLUDEFROMCAPTURE` ([ADR 0001](../docs/adr/0001-built-in-recorder.md)) |
 | Cursor & input | Real OS cursor: smooth movement, human-like typing, scrolling, click ripples. Zoom later |
-| Scene output | `video.mkv` + `microphone.wav` (OBS track 2) + `actions.json` + `metadata.json` |
+| Scene output | `video.mp4` + `microphone.wav` (WASAPI, aligned to the first frame) + `actions.json` + `metadata.json` |
 | Retakes | Per-scene recordings; each scene has a defined initial state. Stitching later |
 | Secrets | Windows Credential Manager via Rust; SQLite stores only reference IDs |
 | Recovery | Pause on failure; AI only *proposes*, I approve |
@@ -41,7 +41,8 @@ Status: **Phase 0 complete (2026-10-21) → Phase 1 MVP**. Remaining uncertainti
 | **Split** | Scenra proposes scene boundaries (navigation, new window, long waits); I adjust them. | Scenes |
 | **Understand** | AI aligns script ↔ scenes/steps, assigns narration, timing, and expectations. I edit and approve. | Approved scenario |
 | **Rehearse** | Replay without recording: every target resolves, every expectation passes. | Rehearsal report |
-| **Record** | Scenra acts, I narrate, OBS records scene by scene. | Scene folders |
+| **Record** | Scenra acts, I narrate, Scenra records scene by scene. | Scene folders |
+| **Edit** | The Editor joins the scenes into one video: best take per scene, trims, cuts, levelled voice, captions. **Assemble with AI** drafts it; I adjust and export ([ADR 0002](../docs/adr/0002-editor.md)). | Finished MP4 + `.srt` |
 
 ### Scene initial state
 
@@ -72,7 +73,7 @@ initial_state:
 
 | Term | Meaning |
 |---|---|
-| **Project** | Target app + launch/attach config, capture region, OBS scene, setup/reset scripts, capability profile. |
+| **Project** | Target app + launch/attach config, capture monitor/region, setup/reset scripts, capability profile. |
 | **Capability profile** | What automation methods this app supports right now (see §5). |
 | **Script** | My free-form voice-over text. |
 | **Teach session** | Raw continuous walkthrough. |
@@ -122,7 +123,7 @@ initial_state:
 │     ├── InputGuard          LL hooks: tag check → expected vs. foreign      │
 │     ├── EmergencyStop       own thread + own hook                           │
 │     ├── Overlay / Teleprompter windows                                      │
-│     ├── ObsClient           obs-websocket v5                                │
+│     ├── Recorder            WGC → H.264 MP4 · WASAPI mic → WAV              │
 │     ├── AiProvider          Gemini → others                                 │
 │     ├── SecretStore         Windows Credential Manager                      │
 │     └── Storage             SQLite + scene folders                          │
@@ -253,7 +254,7 @@ v1 has no speech recognition. `narration_done: after: Ns` exists for Automatic m
 | Hardware input (not injected) | Foreign → pause, take `needs_review` |
 | Injected without the tag (another tool, remote desktop) | Foreign → pause |
 
-- **Emergency stop** runs on its own thread with its own hook and message loop. It calls `release_all()`, cancels the orchestrator, and stops OBS recording safely. It doesn't depend on the UI or WebView being responsive.
+- **Emergency stop** runs on its own thread with its own hook and message loop. It calls `release_all()`, cancels the orchestrator, and stops the recording safely. It doesn't depend on the UI or WebView being responsive.
 - Never hold a key or button across an await; every action has a timeout.
 - Preflight warns about UIPI: an elevated target can't receive input from a non-elevated Scenra.
 - Phase 0 tests the guard with **real hardware input** and with Scenra input.
@@ -263,15 +264,23 @@ v1 has no speech recognition. `narration_done: after: Ns` exists for Automatic m
 ## 9. Capture, Audio & Output
 
 - Teleprompter: separate Tauri window, `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` on its HWND. It takes the form of the compact pill (design C1–C5, `design/scenra-canvas/README.md`).
-- OBS display or region capture; cursor capture on.
-- Audio: Advanced output, MKV, track 1 = mix, track 2 = mic only, using Scenra's own OBS profile. Audio is recorded as PCM, so Scenra demuxes track 2 → `microphone.wav` itself with no ffmpeg (Phase 0, `mkv.rs`); optional remux to MP4 later. One recorder, so the mic is never recorded twice.
+- Built-in recorder (`recorder/`, [ADR 0001](../docs/adr/0001-built-in-recorder.md)), replacing OBS since 2026-10-31: Windows.Graphics.Capture of one monitor, cursor on, no border, frames kept on the GPU into Windows' hardware H.264 encoder → `video.mp4` (variable frame rate, up to 30 fps, no audio track). Region capture needs Scenra's own Media Foundation encoder and comes next.
+- Audio: the default mic via WASAPI → `microphone.wav` (48 kHz mono PCM). Both streams use QPC timestamps; the mic is trimmed or padded to start at the video's first frame.
 
 ```
-recordings/<project>/<take-timestamp>/scene-03/
-├── video.mkv
-├── microphone.wav
-├── actions.json     # executed actions, OBS-timecode aligned, secrets as refs only
-└── metadata.json    # scenario version, capability profile, DPI, take status
+Videos\Scenra\<session>\        # sessions folder: setting `sessionsDir` or SCENRA_SESSIONS_DIR
+├── session.json         # id, title
+├── script.json          # the scenario the scenes were recorded from
+├── initial.json         # each scene's starting page, for retakes
+├── scene-03-take-2\
+│   ├── video.mp4
+│   ├── microphone.wav
+│   ├── actions.json     # approaches and clicks, seconds from the first frame (the editor never cuts through them)
+│   ├── metadata.json    # monitor, frame/mic clock offsets
+│   └── transcript.json  # words with times, if transcription was allowed
+├── edit.json            # the editor's non-destructive edit
+├── .edit-cache\         # levelled mic copies for export
+└── export\              # finished .mp4, .srt, description.txt
 ```
 
 ---
@@ -301,8 +310,8 @@ Exit criteria:
 - [x] It finds a button by `data-testid`.
 - [x] Rust maps it to physical screen coordinates; the hover probe passes at 150 % scaling (the presenter's display; 100 % is deferred to Phase 2).
 - [x] The InputEngine moves the real cursor smoothly and clicks, with an overlay ripple.
-- [x] OBS records the interaction via obs-websocket; `microphone.wav` is extracted from track 2.
-- [x] The teleprompter overlapping the target is absent from the recording; cursor, ripple, and the target's dialog are present. Tested with both OBS display-capture methods.
+- [x] OBS records the interaction via obs-websocket; `microphone.wav` is extracted from track 2. *(Superseded 2026-10-31 by the built-in recorder.)*
+- [x] The teleprompter overlapping the target is absent from the recording; cursor, ripple, and the target's dialog are present. Tested with both OBS display-capture methods, then re-proven on the built-in recorder (2026-10-31).
 - [x] The emergency stop interrupts mid-motion and mid-typing, even with the UI frozen (simulated hang).
 - [x] The InputGuard correctly separates tagged Scenra input from real mouse/keyboard input.
 

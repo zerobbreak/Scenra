@@ -25,7 +25,7 @@ function harness({ actions = [], mode = 'record', freeMemoryMb = 2048, failPress
   const engine = {
     takePreflight: async () => ({ freeMemoryMb, warning: freeMemoryMb < 1024 ? "Low RAM: record anyway or check again" : null }),
     startTake: async name => calls.push(name),
-    stopTake: async () => ({ microphoneSeconds: 5, droppedFramesPercent: 12, freeMemoryMb: 900 }),
+    stopTake: async () => ({ microphoneSeconds: 5, lateFramesPercent: 12, freeMemoryMb: 900 }),
   };
   const react = {
     useState(initial) {
@@ -86,7 +86,7 @@ test('final scene Retry starts a new take in the same session and preserves warn
   await h.reader.startScene(); await h.flush();
   await h.advance(8000);
   assert.equal(h.reader.finished, true);
-  assert.equal(h.reader.takes[0].take.droppedFramesPercent, 12);
+  assert.equal(h.reader.takes[0].take.lateFramesPercent, 12);
   await h.reader.restartScene(); await h.flush();
   assert.equal(h.reader.finished, false);
   assert.equal(h.reader.phase, 'reading');

@@ -79,6 +79,11 @@ pub struct AiStatus {
     model: &'static str,
 }
 
+/// Whether a Gemini key is available.
+pub fn status_configured() -> bool {
+    secrets::gemini_key().is_some()
+}
+
 pub fn status() -> AiStatus {
     let source = secrets::gemini_key().map(|(_, source)| source);
     AiStatus { configured: source.is_some(), source, model: GEMINI_MODELS[0] }
@@ -230,18 +235,36 @@ impl AiProvider for Gemini {
 impl Gemini {
     /// One structured-output request, falling back through [`GEMINI_MODELS`]. Returns the JSON text.
     fn generate(&self, system: &str, prompt: &str, schema: Value) -> Result<String, String> {
+        self.request(system, json!([{ "text": prompt }]), schema, 0.7, Duration::from_secs(60))
+    }
+
+    /// A one-off structured text request (e.g. a video description). Returns the JSON text.
+    pub fn describe(&self, system: &str, prompt: &str, schema: Value) -> Result<String, String> {
+        self.request(system, json!([{ "text": prompt }]), schema, 0.6, Duration::from_secs(60))
+    }
+
+    /// Transcribes 16 kHz mono 16-bit WAV narration. Returns the JSON text matching `schema`.
+    pub fn transcribe(&self, wav: &[u8], system: &str, prompt: &str, schema: Value) -> Result<String, String> {
+        use base64::Engine;
+        let audio = base64::engine::general_purpose::STANDARD.encode(wav);
+        let parts = json!([{ "inlineData": { "mimeType": "audio/wav", "data": audio } }, { "text": prompt }]);
+        self.request(system, parts, schema, 0.0, Duration::from_secs(180))
+    }
+
+    /// One structured-output request with these user `parts`, falling back through [`GEMINI_MODELS`].
+    fn request(&self, system: &str, parts: Value, schema: Value, temperature: f64, timeout: Duration) -> Result<String, String> {
         let body = json!({
             "systemInstruction": { "parts": [{ "text": system }] },
-            "contents": [{ "role": "user", "parts": [{ "text": prompt }] }],
+            "contents": [{ "role": "user", "parts": parts }],
             "generationConfig": {
                 "responseMimeType": "application/json",
                 "responseSchema": schema,
-                "temperature": 0.7
+                "temperature": temperature
             }
         });
 
         let agent = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(60)))
+            .timeout_global(Some(timeout))
             .http_status_as_error(false)
             .build()
             .new_agent();
@@ -276,7 +299,7 @@ impl Gemini {
         reply["candidates"][0]["content"]["parts"][0]["text"]
             .as_str()
             .map(str::to_owned)
-            .ok_or_else(|| "Gemini returned no script".to_owned())
+            .ok_or_else(|| "Gemini returned no answer".to_owned())
     }
 }
 

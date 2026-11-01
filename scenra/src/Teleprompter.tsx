@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { openEditor } from "./editor/editor";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onPrompter, sendPrompter } from "./prompter";
 import { NextAction, Position, SPEEDS, Speed, useReader } from "./reader";
@@ -175,12 +176,12 @@ function seconds(take: { microphoneSeconds: number }) {
 }
 
 /// Above this, a take looks visibly choppy; worth a retake once the machine has room.
-const DROPPED_FRAMES_LIMIT = 5;
+const LATE_FRAMES_LIMIT = 5;
 
 function choppy(take: TakeResult) {
-  if (take.droppedFramesPercent <= DROPPED_FRAMES_LIMIT) return null;
+  if (take.lateFramesPercent <= LATE_FRAMES_LIMIT) return null;
   const memory = take.freeMemoryMb < 1024 ? ` with ${take.freeMemoryMb} MB of RAM free; close other apps and` : ";";
-  return `OBS dropped ${Math.round(take.droppedFramesPercent)}% of frames${memory} retake it`;
+  return `Recording fell behind on ${Math.round(take.lateFramesPercent)}% of frames${memory} retake it`;
 }
 
 /// Recording, between scenes: what was just saved, and the button that records the next scene.
@@ -458,18 +459,26 @@ export default function Teleprompter() {
     body = (
       <div className="flex flex-1 items-center gap-4 px-6">
         <div className="min-w-0 flex-1">
-          <p className="m-0 text-sm">All {script.scenes.length} scenes recorded - {reader.takes.length} takes</p>
+          <p className="m-0 text-sm">
+            {session?.scene != null ? `Scene ${session.scene + 1} retaken` : `All ${script.scenes.length} scenes recorded - ${reader.takes.length} takes`}
+          </p>
           {reader.takes.length > 0 && choppy(reader.takes[reader.takes.length - 1].take) && (
             <p title={choppy(reader.takes[reader.takes.length - 1].take)!} className="m-0 truncate text-xs text-[#FDE68A]">
               {choppy(reader.takes[reader.takes.length - 1].take)}
             </p>
           )}
-          <p className="m-0 truncate text-xs text-[#8D8F96]">recordings/takes/{session?.id}</p>
+          <p className="m-0 truncate text-xs text-[#8D8F96]">Session {session?.id}</p>
         </div>
         <button type="button" onClick={() => reader.restartScene()}
           className="flex-none cursor-pointer rounded-full border-none bg-[#33363D] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#40444C]">
-          Retake scene {script.scenes.length}
+          Retake scene {session?.scene != null ? session.scene + 1 : script.scenes.length}
         </button>
+        {session && (
+          <button type="button" onClick={() => void openEditor(session.id)}
+            className="flex-none cursor-pointer rounded-full border-none bg-[#6366F1] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#818CF8]">
+            {session.scene != null ? "Back to editor" : "Open in editor"}
+          </button>
+        )}
       </div>
     );
   else if (reader.finished) body = <Message>That’s the whole script · {format(elapsed)} · press Retry to read the last scene again.</Message>;

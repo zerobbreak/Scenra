@@ -1,7 +1,7 @@
 # Scenra
 
 *From script to scene.* A recording director for software demos: teach it a workflow once, and it
-replays the workflow with a real, natural cursor while you narrate and OBS records each scene.
+replays the workflow with a real, natural cursor while you narrate and Scenra records each scene.
 
 Status: **Phase 0 complete; Phase 1 MVP in progress**. See [`context/PROJECT_OUTLINE.md`](context/PROJECT_OUTLINE.md)
 for the architecture and exit criteria.
@@ -12,6 +12,7 @@ for the architecture and exit criteria.
 |---|---|
 | `scenra/` | The Scenra Tauri app (Rust core in `src-tauri/`, React + Tailwind UI in `src/`) |
 | `fixtures/demo-target/` | "Lumina", a tiny Tauri app with `data-testid` buttons and a dialog, used as the automation target |
+| `docs/adr/` | Architecture decisions (0001: built-in recorder instead of OBS) |
 | `docs/phase0/` | Test procedures and results for each Phase 0 exit criterion (`02-input-and-recording.md` has steps 2–7) |
 | `context/` | Project spec, outline, and research notes |
 | `design/scenra-canvas/` | Snapshot of the UI design canvas |
@@ -21,7 +22,8 @@ for the architecture and exit criteria.
 - Windows 10 2004+ / 11, with WebView2 (preinstalled on Windows 11)
 - Rust (stable, edition 2024) with the MSVC toolchain
 - Node 22+ and pnpm
-- OBS Studio 30+ (obs-websocket v5 is built in)
+- A microphone set as the Windows default recording device. No OBS needed: Scenra records the
+  screen and mic itself ([ADR 0001](docs/adr/0001-built-in-recorder.md))
 
 ## Display setup
 
@@ -36,10 +38,20 @@ monitor's scaling from Windows and maps page coordinates to physical pixels itse
 - **Check pointer accuracy**: with the demo target open (Step 2), moves the cursor to its New
   Recording button and checks the page saw it there (within 2 CSS px).
 
-To check that OBS hides the prompter on your setup, use **Run OBS matrix** (Step 1). It works with
-any OBS canvas size: Display Capture can be scaled or cropped, as long as it uses top-left
-alignment, no rotation and no bounding box (right-click › Transform › Reset Transform gives you
-that), and captures the monitor the target is on.
+- **Record**: the monitor takes record (the primary one by default). A take records the whole
+  monitor, so a scene can move between apps.
+
+To check that the prompter stays out of your recordings, use **Run capture matrix** (Step 1). It
+records takes of the monitor the target is on and checks each frame for the prompter.
+
+## Editing
+
+Recorded sessions are saved in `Videos\Scenra\` (set `SCENRA_SESSIONS_DIR` to use another folder,
+e.g. for dev runs). **Open editor** in the main window, or **Open in editor** when a recording
+finishes, opens the Editor: pick a take per scene, trim, cut (by time or by selecting words in the
+transcript), and **Export video** to `<session>\export\`. **Tidy up** trims silence and shortens long
+pauses on this computer. **Assemble with AI** (after you allow sending narration to Gemini) picks
+the best take, cuts stumbles and adds captions. See [ADR 0002](docs/adr/0002-editor.md).
 
 ## Develop
 

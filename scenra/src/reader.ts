@@ -7,14 +7,14 @@ import { Action, Scenario, Session, approachAction, pressAction, checkSceneStart
 // a clock stands in for the presenter's voice.
 //
 // Rehearse reads the whole script back to back after one countdown. Record makes each scene its
-// own OBS take: the presenter starts each scene, and its take stops after the scene's last word.
+// own take: the presenter starts each scene, and its take stops after the scene's last word.
 
 export const SPEEDS = { Slow: 120, Natural: 150, Fast: 185 } as const;
 export type Speed = keyof typeof SPEEDS;
 
 export type Position = { scene: number; line: number; word: number };
 export type ActionState = "done" | "failed";
-/// `ready`: waiting for the presenter to record the scene. `starting`/`saving`: OBS is
+/// `ready`: waiting for the presenter to record the scene. `starting`/`saving`: the recorder is
 /// starting or finishing the scene's take. Rehearsals are always `reading`.
 export type Phase = "ready" | "starting" | "reading" | "saving";
 export type SceneTake = { scene: number; attempt: number; take: TakeResult };
@@ -62,7 +62,7 @@ export function useReader(script: Scenario | null, session: Session | null, paus
 
   // A new script or session starts over: a rehearsal with the countdown, a recording at scene 1.
   useEffect(() => {
-    setPos({ scene: 0, line: 0, word: 0 });
+    setPos({ scene: session?.scene ?? 0, line: 0, word: 0 });
     setPhase(record ? "ready" : "reading");
     setCountdown(record ? 0 : COUNTDOWN);
     setActions({});
@@ -74,7 +74,7 @@ export function useReader(script: Scenario | null, session: Session | null, paus
     setNeedsSetup(false);
     fired.current.clear();
     approached.current.clear();
-    attempts.current = {};
+    attempts.current = { ...(session?.attempts ?? {}) };
   }, [script, session, record]);
 
   const finished = !script || pos.scene >= script.scenes.length;
@@ -184,7 +184,7 @@ export function useReader(script: Scenario | null, session: Session | null, paus
     setActions((a) => Object.fromEntries(Object.entries(a).filter(([k]) => !k.startsWith(`${scene}:`))));
   }
 
-  /// Record mode: starts the scene's take (preflight, then OBS), then the countdown.
+  /// Record mode: starts the scene's take (preflight, then the recorder), then the countdown.
   async function startScene(scene = pos.scene, allowLowMemory = false) {
     if (!session || !script || scene >= script.scenes.length || starting.current) return;
     starting.current = true;
@@ -224,12 +224,12 @@ export function useReader(script: Scenario | null, session: Session | null, paus
     await queue.current;
     await sleep(TAIL_MS);
     try {
-      // Stay on Scenra's OBS profile until the last scene: switching resets OBS's video.
-      const take = await stopTake(scene + 1 < (script?.scenes.length ?? 0));
+      const take = await stopTake();
       setTakes((t) => [...t, { scene, attempt: attempts.current[scene], take }]);
-      setPos({ scene: scene + 1, line: 0, word: 0 });
+      // A retake from the editor records one scene, then finishes.
+      setPos({ scene: session?.scene != null ? (script?.scenes.length ?? 0) : scene + 1, line: 0, word: 0 });
     } catch (e) {
-      // OBS may still be recording; Stop on the control bar tries again.
+      // The recorder has stopped either way; the take can be recorded again.
       setLastError(`Couldn’t save scene ${scene + 1}: ${e}`);
     }
     setPhase("ready");
@@ -244,7 +244,7 @@ export function useReader(script: Scenario | null, session: Session | null, paus
 
   async function restartScene() {
     if (!script) return;
-    const scene = Math.min(pos.scene, script.scenes.length - 1);
+    const scene = finished && session?.scene != null ? session.scene : Math.min(pos.scene, script.scenes.length - 1);
     if (scene < 0) return;
     if (record && (finished || phase === "ready")) { await startScene(scene); return; }
     setHalted(false);
@@ -259,7 +259,7 @@ export function useReader(script: Scenario | null, session: Session | null, paus
     setPhase("saving");
     await queue.current;
     let take: TakeResult;
-    try { take = await stopTake(true); }
+    try { take = await stopTake(); }
     catch (e) { setLastError(`Could not stop the take: ${e}. Use Stop to try again.`); setPhase("ready"); return; }
     setTakes((t) => [...t, { scene: pos.scene, attempt: attempts.current[pos.scene], take }]);
     await startScene(pos.scene);

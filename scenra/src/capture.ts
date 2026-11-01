@@ -34,14 +34,14 @@ export type MatrixShot = {
 
 export type MatrixRow = {
   name: string;
-  method: "WGC" | "DXGI";
+  method: "WGC";
   scale: number;
   take: string;
   shots: MatrixShot[];
   passed: boolean;
 };
 
-/** Runs the step 1 matrix for the current display scaling. Needs OBS and the demo target. */
+/** Runs the step 1 matrix for the current display scaling with the built-in recorder. Needs the demo target. */
 export const runCaptureMatrix = (monitorIndex?: number) => invoke<MatrixRow[]>("run_capture_matrix", { monitorIndex: monitorIndex ?? null });
 
 export const resizeTeleprompter = (expanded: boolean) => invoke<void>("resize_teleprompter", { expanded });

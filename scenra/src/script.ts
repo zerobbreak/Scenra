@@ -23,7 +23,8 @@ export const onScriptChanged = (handler: (s: Scenario) => void) =>
 
 // Mirrors `script::Session`: one pass through the script in the pill.
 export type Mode = "rehearse" | "record";
-export type Session = { mode: Mode; id: string };
+/** `scene`: a retake from the editor (record just that scene). `attempts`: takes already on disk per scene. */
+export type Session = { mode: Mode; id: string; scene?: number; attempts?: Record<number, number> };
 
 export const startSession = (mode: Mode) => invoke<Session>("start_session", { mode });
 export const currentSession = () => invoke<Session | null>("current_session");

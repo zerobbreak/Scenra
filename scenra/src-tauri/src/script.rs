@@ -32,13 +32,19 @@ pub enum Mode {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Session {
-    mode: Mode,
+    pub(crate) mode: Mode,
     /// Timestamp; recorded sessions keep their scene takes in a folder of this name.
-    id: String,
+    pub(crate) id: String,
+    /// A retake from the editor: record only this scene (0-based), then finish.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) scene: Option<usize>,
+    /// Takes already in the session folder, per scene, so a retake never reuses a folder.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub(crate) attempts: std::collections::BTreeMap<usize, u32>,
 }
 
 #[derive(Default)]
-pub struct CurrentSession(Mutex<Option<Session>>);
+pub struct CurrentSession(pub(crate) Mutex<Option<Session>>);
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -132,11 +138,21 @@ pub fn current_script(script: State<'_, CurrentScript>) -> Result<Option<Scenari
 #[tauri::command]
 pub fn start_session(
     app: AppHandle, session: State<'_, CurrentSession>, setup: State<'_, crate::setup::SetupState>,
-    teach: State<'_, TeachState>, mode: Mode,
+    teach: State<'_, TeachState>, script: State<'_, CurrentScript>, initial: State<'_, ScriptInitialState>, mode: Mode,
 ) -> Result<Session, String> {
     setup.ensure_idle()?;
     teach.ensure_idle()?;
-    let started = Session { mode, id: take::stamp() };
+    let started = Session { mode, id: take::stamp(), scene: None, attempts: Default::default() };
+    if matches!(started.mode, Mode::Record) {
+        // Saved up front so the editor can open the session even if Scenra closes mid-way.
+        let scenario = script.0.lock().map_err(err)?.clone();
+        let title = scenario.as_ref().map(|s| s.title.clone()).unwrap_or_default();
+        let info = crate::session::SessionInfo { id: started.id.clone(), title };
+        let dir = crate::session::root(&app).join(&started.id);
+        crate::session::save(&dir, &info, scenario.as_ref())?;
+        // Each scene's starting page, so a retake from the editor can check and restore it.
+        crate::session::write_json(&dir.join(crate::session::INITIAL_FILE), &*initial.0.lock().map_err(err)?)?;
+    }
     *session.0.lock().map_err(err)? = Some(started.clone());
     app.emit("session-changed", &started).map_err(err)?;
     Ok(started)
@@ -150,21 +166,28 @@ pub fn current_session(session: State<'_, CurrentSession>) -> Result<Option<Sess
 /// Glides the real cursor onto the control labelled `target` and hover-verifies it, ahead of
 /// its trigger word.
 #[tauri::command(async)]
-pub fn approach_action(targets: State<'_, LaunchedTarget>, setup: State<'_, crate::setup::SetupState>, target: String) -> Result<(), String> {
+pub fn approach_action(
+    targets: State<'_, LaunchedTarget>, setup: State<'_, crate::setup::SetupState>, take: State<'_, take::CurrentTake>, target: String,
+) -> Result<(), String> {
     setup.ensure_idle()?;
-    engine::approach(&targets, &Selector::Label(target), Pace::Natural).map(|_| ())
+    take::logged(&take, "approach", &target, || engine::approach(&targets, &Selector::Label(target.clone()), Pace::Natural).map(|_| ()))
 }
 
 /// Clicks the control labelled `target` on its trigger word (re-aiming first if needed).
 #[tauri::command(async)]
-pub fn press_action(targets: State<'_, LaunchedTarget>, setup: State<'_, crate::setup::SetupState>, target: String, expires_at: u64) -> Result<(), String> {
+pub fn press_action(
+    targets: State<'_, LaunchedTarget>, setup: State<'_, crate::setup::SetupState>, take: State<'_, take::CurrentTake>,
+    target: String, expires_at: u64,
+) -> Result<(), String> {
     setup.ensure_idle()?;
     let expiry = std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_millis(expires_at))
         .ok_or("Invalid action cue expiry")?;
     let remaining = expiry.duration_since(std::time::SystemTime::now())
         .map_err(|_| "The action missed its cue; retry the scene")?
         .min(std::time::Duration::from_millis(500));
-    engine::press_before(&targets, &Selector::Label(target), Some(std::time::Instant::now() + remaining))
+    take::logged(&take, "press", &target, || {
+        engine::press_before(&targets, &Selector::Label(target.clone()), Some(std::time::Instant::now() + remaining))
+    })
 }
 
 #[cfg(test)]
@@ -222,7 +245,7 @@ mod tests {
     }
 }
 
-/// Fail closed before OBS starts. Current scripts describe independent scenes on the draft page.
+/// Fail closed before recording starts. Current scripts describe independent scenes on the draft page.
 #[tauri::command(async)]
 pub fn check_scene_start(
     targets: State<'_, LaunchedTarget>, script: State<'_, CurrentScript>,

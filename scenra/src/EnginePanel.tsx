@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import Button from "./Button";
 import {
   GuardCounts,
-  ObsStatus,
   Probe,
   TakeResult,
-  obsStatus,
+  RecorderStatus,
+  recorderStatus,
   startTake,
   stopTake,
   clearStop,
@@ -27,7 +27,7 @@ export default function EnginePanel() {
   const [probe, setProbe] = useState<Probe | null>(null);
   const [guard, setGuard] = useState<GuardCounts | null>(null);
   const [busy, setBusy] = useState(false);
-  const [obs, setObs] = useState<ObsStatus | null>(null);
+  const [recorder, setRecorder] = useState<RecorderStatus | null>(null);
   const [take, setTake] = useState<TakeResult | null>(null);
 
   useEffect(() => {
@@ -93,15 +93,15 @@ export default function EnginePanel() {
       </div>
 
       <div className="space-y-2 rounded-lg bg-zinc-900 p-4 text-sm">
-        <p className="font-medium">OBS take (step 5)</p>
+        <p className="font-medium">Recorder take (step 5)</p>
         <p className="text-zinc-400">
-          {obs
-            ? `OBS ${obs.version} · profile ${obs.profile} · mic ${obs.mic ?? "none"}${obs.recording ? " · RECORDING" : ""}`
-            : "Records with Scenra's own OBS profile (MKV, PCM, mic on track 2), then extracts microphone.wav."}
+          {recorder
+            ? `${recorder.monitor} ${recorder.width}×${recorder.height} · mic ${recorder.mic ?? "none found"} · ${recorder.encoder}`
+            : "Scenra records the screen to video.mp4 and your mic to microphone.wav itself. No OBS needed."}
         </p>
         <div className="flex flex-wrap gap-2">
-          <Button disabled={busy} onClick={() => run("OBS status", async () => setObs(await obsStatus()))}>
-            Check OBS
+          <Button disabled={busy} onClick={() => run("Recorder status", async () => setRecorder(await recorderStatus()))}>
+            Check recorder
           </Button>
           <Button disabled={busy} onClick={() => run("Start take", startTake)}>
             Start take
@@ -128,7 +128,8 @@ export default function EnginePanel() {
         </div>
         {take && (
           <p className="text-xs break-all text-emerald-300">
-            {take.video} · microphone.wav {take.microphoneSeconds.toFixed(1)} s @ {take.sampleRate} Hz × {take.channels}
+            {take.video} · microphone.wav {take.microphoneSeconds.toFixed(1)} s @ {take.sampleRate} Hz × {take.channels} ·
+            Scenra {take.scenraMemoryMb} MB · {take.lateFramesPercent}% late frames
           </p>
         )}
       </div>

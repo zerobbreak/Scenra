@@ -23,6 +23,8 @@ pub struct MonitorInfo {
 pub struct DisplayInfo {
     monitors: Vec<MonitorInfo>,
     overlay_zoom: f64,
+    /// The monitor takes record (Windows device name); `None` = the primary monitor.
+    capture_monitor: Option<String>,
     min_zoom: f64,
     max_zoom: f64,
 }
@@ -45,9 +47,11 @@ pub fn display_info(app: AppHandle) -> Result<DisplayInfo, String> {
             primary: Some(*m.position()) == primary,
         })
         .collect();
+    let saved = settings::load(&app);
     Ok(DisplayInfo {
         monitors,
-        overlay_zoom: settings::load(&app).overlay_zoom,
+        overlay_zoom: saved.overlay_zoom,
+        capture_monitor: saved.capture_monitor,
         min_zoom: MIN_ZOOM,
         max_zoom: MAX_ZOOM,
     })
@@ -66,15 +70,18 @@ pub fn set_overlay_zoom(app: AppHandle, zoom: f64) -> Result<DisplayInfo, String
     display_info(app)
 }
 
-/// Match Windows' monitor interface ID to OBS's monitor_id (resolution alone is ambiguous).
-pub(crate) fn monitor_capture_id(name: &str) -> Result<String, String> {
-    use windows::Win32::Graphics::Gdi::{EnumDisplayDevicesW, DISPLAY_DEVICEW};
-    use windows::core::PCWSTR;
-    let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
-    let mut device = DISPLAY_DEVICEW { cb: size_of::<DISPLAY_DEVICEW>() as u32, ..Default::default() };
-    if !unsafe { EnumDisplayDevicesW(PCWSTR(name.as_ptr()), 0, &mut device, 1) }.as_bool() {
-        return Err("Could not identify the monitor for OBS capture".into());
+/// Chooses the monitor takes record: a Windows device name from `display_info`, or `None` for
+/// the primary monitor.
+#[tauri::command(async)]
+pub fn set_capture_monitor(app: AppHandle, monitor: Option<String>) -> Result<DisplayInfo, String> {
+    if let Some(name) = &monitor {
+        let known = app.available_monitors().map_err(err)?.iter().any(|m| m.name() == Some(name));
+        if !known {
+            return Err(format!("{name} isn't connected"));
+        }
     }
-    let len = device.DeviceID.iter().position(|c| *c == 0).unwrap_or(device.DeviceID.len());
-    Ok(String::from_utf16_lossy(&device.DeviceID[..len]))
+    let mut current = settings::load(&app);
+    current.capture_monitor = monitor;
+    settings::save(&app, &current)?;
+    display_info(app)
 }
