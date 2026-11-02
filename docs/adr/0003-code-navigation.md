@@ -1,6 +1,6 @@
 # ADR 0003: Driving VS Code and other apps
 
-**Status:** Accepted, 2026-11-01. Slice 1 is in progress.
+**Status:** Accepted, 2026-11-01. Slices 1 (VS Code engine) and 2 (Teach in VS Code) are done; slice 3 (UIA layer) is next.
 
 ## Context
 
@@ -48,3 +48,14 @@ Scenra could only drive Chromium pages (Chrome, WebView2) over CDP. Moving throu
   2. Teach in VS Code;
   3. UIA layer;
   4. terminal commands.
+
+## Slice 2: Teach in VS Code (2026-11-02)
+
+Decisions made while building it:
+
+- **Explorer and tab clicks** are recorded as the file that opened and replay as Open through Quick Open, which works whatever folders are expanded. The video shows Quick Open instead of the explorer click.
+- **End states, not events:** Scenra polls the workbench. A new file is an Open at once; a scroll or selection becomes a step after the editor holds still for 0.9 s. VS Code's own scroll restore after opening a file, and a palette command's effects, aren't separate steps.
+- **Commits without an end state** come from an in-page key listener: Enter on a `>` palette entry (its visible name, not its aria-label, which carries the key binding) and Enter in the Search view.
+- **Shortcuts** are kept as flagged, skipped steps, unless the editor shows their effect within 2.5 s (Ctrl+End → the Scroll stands for it). Key combinations in text boxes are text editing and ignored. Typing in the editor isn't recorded and warns once.
+- **Gemini** sees only step names ("Highlight take.rs 195–197"), never code.
+
