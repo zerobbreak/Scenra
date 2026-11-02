@@ -207,15 +207,6 @@ fn start_visual_studio(state: &LaunchedTarget, vs: crate::visualstudio::VisualSt
     Ok(visual_studio_profile(pid))
 }
 
-/// Tests: Visual Studio on `folder`.
-#[cfg(test)]
-pub(crate) fn launch_visual_studio_for_test(folder: &Path) -> Result<LaunchedTarget, String> {
-    let state = LaunchedTarget::default();
-    let vs = crate::visualstudio::VisualStudio { exe: crate::visualstudio::find_exe()?, folder: folder.to_owned() };
-    start_visual_studio(&state, vs)?;
-    Ok(state)
-}
-
 fn visual_studio_profile(pid: u32) -> CapabilityProfile {
     CapabilityProfile {
         application: "Visual Studio".into(),
@@ -570,7 +561,9 @@ fn processes() -> HashMap<u32, ProcessEntry> {
     map
 }
 
-/// Running processes started from `exe` (e.g. "devenv.exe"), ignoring case.
+/// Running processes started from `exe` (e.g. "devenv.exe"), ignoring case. Live tests use
+/// it to find the Visual Studio already open on the repo.
+#[cfg(test)]
 pub fn process_ids(exe: &str) -> Vec<u32> {
     processes().into_iter().filter(|(_, p)| p.exe.eq_ignore_ascii_case(exe)).map(|(pid, _)| pid).collect()
 }

@@ -171,21 +171,6 @@ impl Uia {
         Ok(lines)
     }
 
-    /// The selected text and the screen rectangle of each selected line.
-    pub fn selection(&self, editor: &IUIAutomationElement) -> Result<(String, Vec<Rect>), String> {
-        let pattern = Self::text(editor)?;
-        let (mut text, mut all) = (String::new(), Vec::new());
-        unsafe {
-            let ranges = pattern.GetSelection().map_err(err)?;
-            for i in 0..ranges.Length().map_err(err)? {
-                let range = ranges.GetElement(i).map_err(err)?;
-                text.push_str(&range.GetText(-1).map_err(err)?.to_string());
-                all.extend(rects(&range)?);
-            }
-        }
-        Ok((text, all))
-    }
-
     /// The texts inside the selected list item in any of process `pid`'s windows (a search
     /// popup is a window of its own), or `None` while there isn't one.
     pub fn selected_item_texts(&self, pid: u32) -> Option<Vec<String>> {
@@ -277,7 +262,5 @@ mod tests {
             assert!(line.rect.y >= bounds.y - 1.0 && line.rect.y < bounds.y + bounds.height, "{line:?} outside {bounds:?}");
         }
         assert!(lines.windows(2).all(|w| w[0].number < w[1].number && w[0].rect.y < w[1].rect.y));
-        let (selected, rects) = uia.selection(&editor).unwrap();
-        eprintln!("selection: {} chars over {} lines", selected.len(), rects.len());
     }
 }
