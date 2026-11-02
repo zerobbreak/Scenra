@@ -1,9 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Scenario } from "./script";
+import { Scenario, Step } from "./script";
 
 // Mirrors `teach.rs` in Rust.
-export type StepFlag = "field" | "notControl" | "unlabelled" | "ambiguous" | "disabled";
+export type StepFlag = "field" | "notControl" | "unlabelled" | "ambiguous" | "disabled" | "shortcut" | "notInCodebase" | "offScreen";
 export type PageState = { url: string; headings: string[]; dialogs: string[] };
 export type TeachStep = {
   index: number;
@@ -13,6 +13,8 @@ export type TeachStep = {
   role: string | null;
   before: PageState;
   flags: StepFlag[];
+  /// A VS Code step; its `label` already reads "Open take.rs".
+  step?: Step | null;
 };
 export type TeachSession = { start: PageState; end: PageState; steps: TeachStep[]; warnings: string[] };
 export type TeachStatus = { active: boolean; last: TeachSession | null };
@@ -24,7 +26,19 @@ export const FLAG_TEXT: Record<StepFlag, string> = {
   unlabelled: "the control has no label",
   ambiguous: "another control has the same label",
   disabled: "the control was disabled",
+  shortcut: "keyboard shortcuts aren't replayed yet",
+  notInCodebase: "the file isn't in the codebase folder",
+  offScreen: "the selection ran past the edge of the editor",
 };
+
+/// How a taught step reads in the list: a click on a web page, or what happened in VS Code.
+export function stepText(step: TeachStep): string {
+  if (step.step) return step.label;
+  if (step.flags.includes("shortcut")) return `Shortcut ${step.label}`;
+  if (step.flags.includes("notInCodebase") || step.flags.includes("offScreen")) return step.label;
+  if (step.label) return `Click “${step.label}”`;
+  return step.flags.includes("field") ? "Click into a field" : "Click";
+}
 
 export const startTeach = () => invoke<void>("start_teach");
 export const stopTeach = () => invoke<TeachSession>("stop_teach");

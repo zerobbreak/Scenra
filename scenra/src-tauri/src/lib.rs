@@ -19,6 +19,7 @@ mod setup;
 mod take;
 mod target;
 mod teach;
+mod teach_code;
 mod steps;
 mod vscode;
 

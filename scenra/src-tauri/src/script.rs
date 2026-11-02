@@ -295,7 +295,7 @@ mod tests {
             end: state("end"),
             steps: labels.iter().enumerate().map(|(index, label)| TeachStep {
                 index, at_ms: 0, label: (*label).into(), test_id: None, role: None,
-                before: state(&format!("before {label}")), flags: vec![],
+                before: state(&format!("before {label}")), flags: vec![], step: None,
             }).collect(),
             warnings: vec![],
         }

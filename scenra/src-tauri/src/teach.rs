@@ -96,6 +96,12 @@ pub enum StepFlag {
     /// Another visible control has the same label.
     Ambiguous,
     Disabled,
+    /// A keyboard shortcut in VS Code; it can't be named as a command, so it isn't replayed yet.
+    Shortcut,
+    /// A VS Code file that isn't on disk inside the codebase folder.
+    NotInCodebase,
+    /// A VS Code selection taller than the editor, so its full range couldn't be read.
+    OffScreen,
 }
 
 impl StepFlag {
@@ -106,6 +112,9 @@ impl StepFlag {
             StepFlag::Unlabelled => "the control has no label",
             StepFlag::Ambiguous => "another control has the same label",
             StepFlag::Disabled => "the control was disabled",
+            StepFlag::Shortcut => "keyboard shortcuts aren't replayed yet",
+            StepFlag::NotInCodebase => "the file isn't in the codebase folder",
+            StepFlag::OffScreen => "the selection ran past the edge of the editor",
         }
     }
 }
@@ -122,6 +131,9 @@ pub struct TeachStep {
     /// The page just before this click, in the form scene-start checks compare against.
     pub before: InitialState,
     pub flags: Vec<StepFlag>,
+    /// A VS Code step (open, scroll, highlight…) instead of a click on `label`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<crate::steps::Step>,
 }
 
 impl TeachStep {
@@ -167,6 +179,7 @@ fn step_from(raw: RawClick, started_ms: f64) -> TeachStep {
         role: if field { None } else { raw.role },
         before: raw.before,
         flags,
+        step: None,
     }
 }
 
@@ -190,15 +203,16 @@ const REATTACH_TIMEOUT: Duration = Duration::from_secs(10);
 const REATTACHED: &str = "the page was replaced and Scenra re-attached; a click made at that moment may be missing";
 
 /// Connects to the target's page and installs the binding and listener, for this document and
-/// every new one. Returns the session and the new-document script's id.
-fn attach(port: u16) -> Result<(Session, String), String> {
+/// every new one: the click listener on a web page, the key listener in VS Code. Returns the
+/// session and the new-document script's id.
+fn attach(port: u16, code: bool) -> Result<(Session, String), String> {
     let mut session = page::page_session(port)?;
     // Binding calls are only reported to a session with the Runtime domain enabled.
     session.call("Runtime.enable", json!({}))?;
     // New-document scripts don't run in WebView2 until the Page domain is enabled.
     session.call("Page.enable", json!({}))?;
     session.call("Runtime.addBinding", json!({ "name": BINDING }))?;
-    let script = listener_js();
+    let script = if code { crate::teach_code::listener_js(BINDING) } else { listener_js() };
     let added = session.call("Page.addScriptToEvaluateOnNewDocument", json!({ "source": script }))?;
     let script_id = added["identifier"].as_str().ok_or("couldn't add the teach listener")?.to_owned();
     if session.evaluate(&script)? != json!(true) {
@@ -207,12 +221,64 @@ fn attach(port: u16) -> Result<(Session, String), String> {
     Ok((session, script_id))
 }
 
-/// The click a binding event carries, if the event is one of ours.
-fn click_in(event: &serde_json::Value) -> Option<Result<RawClick, String>> {
+/// What a binding event carries (a click, or a VS Code key), if the event is one of ours.
+fn payload_in<T: serde::de::DeserializeOwned>(event: &serde_json::Value) -> Option<Result<T, String>> {
     (event["method"] == "Runtime.bindingCalled" && event["params"]["name"] == BINDING).then(|| {
         serde_json::from_str(event["params"]["payload"].as_str().unwrap_or_default())
-            .map_err(|e| format!("ignored a click Scenra couldn't read: {e}"))
+            .map_err(|e| format!("ignored a step Scenra couldn't read: {e}"))
     })
+}
+
+/// Turns VS Code changes into steps, reading files from disk for anchors.
+type CodeWatcher = crate::teach_code::Watcher<fn(&Path) -> Option<String>>;
+
+fn read_file(path: &Path) -> Option<String> {
+    std::fs::read_to_string(path).ok()
+}
+
+fn step_from_change(change: crate::teach_code::CodeChange, started_ms: f64) -> TeachStep {
+    TeachStep {
+        index: 0,
+        at_ms: (change.at - started_ms).max(0.0) as u64,
+        label: change.label,
+        test_id: None,
+        role: None,
+        before: change.before,
+        flags: change.flags,
+        step: change.step,
+    }
+}
+
+/// Handles one CDP event: a click on a web page, or a VS Code key. Returns finished steps.
+fn handle_event(
+    event: &serde_json::Value, watcher: Option<&mut CodeWatcher>, started_ms: f64, warnings: &mut Vec<String>,
+) -> Vec<TeachStep> {
+    match watcher {
+        None => match payload_in::<RawClick>(event) {
+            Some(Ok(raw)) => vec![step_from(raw, started_ms)],
+            Some(Err(e)) => {
+                warnings.push(e);
+                vec![]
+            }
+            None => vec![],
+        },
+        Some(watcher) => match payload_in::<crate::teach_code::RawKey>(event) {
+            Some(Ok(raw)) => match watcher.key(raw) {
+                Ok(change) => change.into_iter().map(|c| step_from_change(c, started_ms)).collect(),
+                Err(warning) => {
+                    if !warnings.iter().any(|w| w == warning) {
+                        warnings.push(warning.into());
+                    }
+                    vec![]
+                }
+            },
+            Some(Err(e)) => {
+                warnings.push(e);
+                vec![]
+            }
+            None => vec![],
+        },
+    }
 }
 
 /// The recorder thread's state, handed back on Stop.
@@ -221,6 +287,8 @@ struct Attached {
     script_id: String,
     steps: Vec<TeachStep>,
     warnings: Vec<String>,
+    /// In VS Code: turns editor changes and keys into steps.
+    watcher: Option<CodeWatcher>,
 }
 
 /// A running walkthrough capture against one CDP page.
@@ -233,27 +301,40 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    /// Injects the listener and starts collecting clicks. `on_step` runs on the recorder thread
-    /// for each click as it arrives (provisional index: arrival order).
-    pub fn start(port: u16, on_step: impl Fn(&TeachStep) + Send + 'static) -> Result<Self, String> {
-        setup::single_page(port).map_err(|_| "Teach needs one target tab. Close extra tabs and retry".to_owned())?;
-        page::wait_until_settled(port, Duration::from_secs(15))?;
+    /// Injects the listener and starts collecting clicks, or in VS Code (`codebase` is its
+    /// folder) code steps. `on_step` runs on the recorder thread for each step as it arrives
+    /// (provisional index: arrival order).
+    pub fn start(port: u16, codebase: Option<PathBuf>, on_step: impl Fn(&TeachStep) + Send + 'static) -> Result<Self, String> {
+        let code = codebase.is_some();
+        if !code {
+            setup::single_page(port).map_err(|_| "Teach needs one target tab. Close extra tabs and retry".to_owned())?;
+            page::wait_until_settled(port, Duration::from_secs(15))?;
+        }
         let start = page::initial_state(&mut page::page_session(port)?)?;
         let started_ms = epoch_ms();
-        let (session, script_id) = attach(port)?;
+        let (session, script_id) = attach(port, code)?;
+        let watcher = codebase.map(|folder| CodeWatcher::new(folder, read_file as fn(&Path) -> Option<String>));
+        let snapshot = crate::teach_code::snapshot_js();
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
         let thread = std::thread::Builder::new()
             .name("scenra-teach".into())
             .spawn(move || {
-                let mut run = Attached { session, script_id, steps: Vec::new(), warnings: Vec::new() };
+                let mut run = Attached { session, script_id, steps: Vec::new(), warnings: Vec::new(), watcher };
+                let push = |run: &mut Attached, found: Vec<TeachStep>| {
+                    for mut step in found {
+                        step.index = run.steps.len();
+                        on_step(&step);
+                        run.steps.push(step);
+                    }
+                };
                 let mut polls = 0u32;
                 while !stopping.load(Ordering::SeqCst) {
                     match run.session.next_event(POLL)? {
                         Some(event) if event["method"] == "Inspector.detached" => {
                             let deadline = std::time::Instant::now() + REATTACH_TIMEOUT;
                             let (session, script_id) = loop {
-                                match attach(port) {
+                                match attach(port, code) {
                                     Ok(attached) => break attached,
                                     Err(_) if std::time::Instant::now() < deadline && !stopping.load(Ordering::SeqCst) => {
                                         std::thread::sleep(POLL);
@@ -268,17 +349,20 @@ impl Recorder {
                                 run.warnings.push(REATTACHED.into());
                             }
                         }
-                        Some(event) => match click_in(&event) {
-                            Some(Ok(raw)) => {
-                                let mut step = step_from(raw, started_ms);
-                                step.index = run.steps.len();
-                                on_step(&step);
-                                run.steps.push(step);
-                            }
-                            Some(Err(e)) => run.warnings.push(e),
-                            None => {}
-                        },
+                        Some(event) => {
+                            let found = handle_event(&event, run.watcher.as_mut(), started_ms, &mut run.warnings);
+                            push(&mut run, found);
+                        }
                         None => {}
+                    }
+                    if run.watcher.is_some() {
+                        // VS Code: what the editor shows now. A failed read (mid-reload) just waits.
+                        let snap = run.session.evaluate(&snapshot).ok().and_then(|v| serde_json::from_value(v).ok());
+                        if let (Some(snap), Some(watcher)) = (snap, run.watcher.as_mut()) {
+                            let found = watcher.observe(snap, epoch_ms()).into_iter().map(|c| step_from_change(c, started_ms)).collect();
+                            push(&mut run, found);
+                        }
+                        continue;
                     }
                     polls += 1;
                     if polls.is_multiple_of(TAB_CHECK_EVERY) && setup::single_page(port).is_err() {
@@ -297,15 +381,15 @@ impl Recorder {
     /// Stops collecting, removes the listener and returns the walkthrough in page order.
     pub fn stop(self) -> Result<TeachSession, String> {
         self.stop.store(true, Ordering::SeqCst);
-        let Attached { mut session, script_id, mut steps, mut warnings } =
+        let Attached { mut session, script_id, mut steps, mut warnings, mut watcher } =
             self.thread.join().map_err(|_| "the teach recorder crashed")??;
-        // Clicks already queued when Stop was pressed still count.
+        // Steps already queued when Stop was pressed still count.
         while let Some(event) = session.next_event(Duration::from_millis(50))? {
-            match click_in(&event) {
-                Some(Ok(raw)) => steps.push(step_from(raw, self.started_ms)),
-                Some(Err(e)) => warnings.push(e),
-                None => {}
-            }
+            steps.extend(handle_event(&event, watcher.as_mut(), self.started_ms, &mut warnings));
+        }
+        // In VS Code, a scroll or selection still settling, and shortcuts still waiting.
+        if let Some(watcher) = watcher.as_mut() {
+            steps.extend(watcher.finish(epoch_ms()).into_iter().map(|c| step_from_change(c, self.started_ms)));
         }
         let _ = session.call("Page.removeScriptToEvaluateOnNewDocument", json!({ "identifier": script_id }));
         let _ = session.evaluate("window.__scenraTeachOff && window.__scenraTeachOff(); true");
@@ -414,7 +498,9 @@ pub fn start_teach(
     if active.is_some() { return Err("Teaching is already in progress".into()); }
     let (pid, port) = target::running(&targets)?;
     locate::restore_target(pid)?;
-    let recorder = Recorder::start(port, move |step| { let _ = app.emit("teach-step", step); })?;
+    // In VS Code, Teach records code steps against the codebase folder.
+    let codebase = target::vscode(&targets).ok().map(|(_, _, vs)| vs.folder);
+    let recorder = Recorder::start(port, codebase, move |step| { let _ = app.emit("teach-step", step); })?;
     *active = Some(recorder);
     Ok(())
 }
@@ -536,7 +622,7 @@ mod tests {
         let result = (|| -> Result<(), String> {
             page::wait_until_settled(port, Duration::from_secs(15))?;
             let (sent, received) = std::sync::mpsc::channel();
-            let recorder = Recorder::start(port, move |step| { let _ = sent.send(step.label.clone()); })?;
+            let recorder = Recorder::start(port, None, move |step| { let _ = sent.send(step.label.clone()); })?;
             let next = |what: &str| received.recv_timeout(Duration::from_secs(5)).map_err(|_| format!("the click on {what} wasn't recorded"));
             press(port, "create-recording")?; next("create-recording")?;
             press(port, "title-input")?; next("title-input")?;
@@ -586,7 +672,7 @@ mod tests {
             page::page_session(port)?.call("Page.bringToFront", json!({}))?;
             page::wait_until_settled(port, Duration::from_secs(15))?;
             let (sent, received) = std::sync::mpsc::channel();
-            let recorder = Recorder::start(port, move |step| { let _ = sent.send(step.label.clone()); })?;
+            let recorder = Recorder::start(port, None, move |step| { let _ = sent.send(step.label.clone()); })?;
             let next = |what: &str| received.recv_timeout(Duration::from_secs(5)).map_err(|_| format!("the click on {what} wasn't recorded"));
             press(port, "create-recording")?; next("create-recording")?;
 
@@ -634,7 +720,7 @@ mod tests {
         let result = (|| -> Result<(), String> {
             page::wait_until_settled(port, Duration::from_secs(15))?;
             let (sent, received) = std::sync::mpsc::channel();
-            let recorder = Recorder::start(port, move |_| { let _ = sent.send(()); })?;
+            let recorder = Recorder::start(port, None, move |_| { let _ = sent.send(()); })?;
             let next = |what: &str| received.recv_timeout(Duration::from_secs(5)).map_err(|_| format!("the click on {what} wasn't recorded"));
             press(port, "create-recording")?; next("create-recording")?;
             press(port, "open-settings")?; next("open-settings")?;
