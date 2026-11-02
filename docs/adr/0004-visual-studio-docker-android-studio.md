@@ -1,6 +1,6 @@
 # ADR 0004: Visual Studio, Docker and Android Studio
 
-**Status:** Accepted, 2026-11-02. Visual Studio: launch, steps and scene starts done; Teach is next.
+**Status:** Accepted, 2026-11-02. Visual Studio done (launch, steps, scene starts, Teach). Docker is next.
 
 ## Context
 
@@ -31,3 +31,13 @@ ADR 0003 made VS Code a first-class target. Presenters also need Visual Studio, 
 - **Visible lines:** Visual Studio's TextPattern also reports a few laid-out lines below the editor's edge; only lines inside the editor's rectangle count.
 - **Shared layers:** `dte.rs` (late-bound COM over `IDispatch`, retrying calls Visual Studio rejects while busy) and `uia.rs` (the UI Automation client). The UI Automation layer is also slice 3 of ADR 0003.
 - **Steps and anchors** are the same as VS Code's (`steps::Step`, text and symbol anchors), so scripts and Teach work the same across editors.
+
+## Teach in Visual Studio
+
+- **Editor end states** (Open, Scroll, Highlight) come from polling DTE and UI Automation every 200 ms into the same watcher as VS Code (`teach_code::Watcher`). DTE reports the whole selection, so a selection taller than the editor isn't a problem.
+- **Commands** come from DTE's command events (`_dispCommandEvents`, IID `FF2D5C12-FEEA-11D0-BBC8-00A0C90F2744` from `Microsoft.VisualStudio.Interop.dll`; `1DED92B5-…` is the events class, not the interface). The events object comes back as `IUnknown`, not `IDispatch`. The subscriber only queues the command's GUID and ID: Visual Studio waits on the call, so names are looked up afterwards on the recorder thread. Editing, caret, clipboard, save and find/go-to commands are ignored. Any other command waits like a VS Code shortcut: if the editor shows its effect, that step stands for it; otherwise it becomes a **Palette** step that replays by name. So in Visual Studio, shortcuts replay instead of being skipped.
+- **Searches:** Visual Studio 2026's Find in Files doesn't update `DTE.Find.FindWhat` and raises no named command. The Find Results window's summary line (`Find all "fn stop", Entire Workspace, …`) is redrawn for every search, with a new UI Automation runtime id even for the same text. Finding it takes about 0.7 s, so a separate thread checks once a second, with one last check at Stop.
+- **Development note:** Visual Studio 18.11 exits within seconds when started inside Claude Code's sandbox; live tests start it from a normal terminal.
+
+Verified live (`teaches_and_replays_in_visual_studio`, 44 s): teaching Open, Scroll, Highlight, Toggle Word Wrap and a Find in Files search recorded exactly those five steps; drafting, scene-start restore and check, and replay with the exact highlight all passed.
+

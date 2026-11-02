@@ -59,7 +59,7 @@ impl Dispatch {
                 }
                 Err(e) => {
                     let detail = exception.bstrDescription.to_string();
-                    return Err(format!("{name}: {}", if detail.is_empty() { err(e) } else { detail }));
+                    return Err(format!("{name}: {} ({:#010x}, scode {:#010x})", if detail.is_empty() { err(e.clone()) } else { detail }, e.code().0, exception.scode));
                 }
             }
         }
@@ -77,8 +77,17 @@ impl Dispatch {
 
     /// A property or method result that is itself an object.
     pub fn object(&self, name: &str, args: &[VARIANT]) -> Result<Dispatch, String> {
+        self.unknown(name, args)?.cast::<IDispatch>().map(Dispatch).map_err(|_| format!("{name} can't be automated"))
+    }
+
+    /// A property or method result as a plain COM object (some, like event sources, aren't
+    /// `IDispatch`).
+    pub fn unknown(&self, name: &str, args: &[VARIANT]) -> Result<IUnknown, String> {
         let value = self.call(name, args)?;
-        IDispatch::try_from(&value).map(Dispatch).map_err(|_| format!("{name} is empty"))
+        IDispatch::try_from(&value)
+            .map(|d| d.cast::<IUnknown>())
+            .unwrap_or_else(|_| IUnknown::try_from(&value))
+            .map_err(|_| format!("{name} is empty"))
     }
 
     pub fn string(&self, name: &str) -> Result<String, String> {
@@ -128,6 +137,111 @@ pub fn wait_for(pid: u32, timeout: Duration) -> Result<Dispatch, String> {
     }
 }
 
+// ---- Command events ---------------------------------------------------------------------------
+
+use std::sync::mpsc::{Receiver, Sender, channel};
+use windows::Win32::System::Com::{IConnectionPoint, IConnectionPointContainer, IDispatch_Impl, IDispatch_Vtbl, ITypeInfo};
+use windows::core::{IUnknown, implement, interface};
+
+/// EnvDTE's `_dispCommandEvents` (IID from `Microsoft.VisualStudio.Interop.dll`; not the
+/// `CommandEventsClass` ID). Visual Studio calls a subscriber through `IDispatch` only, so the
+/// interface adds no methods of its own.
+#[interface("FF2D5C12-FEEA-11D0-BBC8-00A0C90F2744")]
+unsafe trait DispCommandEvents: IDispatch {}
+
+/// `_dispCommandEvents.AfterExecute(Guid, ID, CustomIn, CustomOut)`.
+const AFTER_EXECUTE: i32 = 2;
+
+/// A command Visual Studio ran: its group GUID and ID, and when (Unix epoch ms).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RanCommand {
+    pub guid: String,
+    pub id: i32,
+    pub at: f64,
+}
+
+fn epoch_ms() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64() * 1000.0
+}
+
+#[implement(DispCommandEvents)]
+struct CommandSink {
+    sent: Sender<RanCommand>,
+}
+
+impl DispCommandEvents_Impl for CommandSink_Impl {}
+
+impl IDispatch_Impl for CommandSink_Impl {
+    fn GetTypeInfoCount(&self) -> windows::core::Result<u32> {
+        Ok(0)
+    }
+
+    fn GetTypeInfo(&self, _: u32, _: u32) -> windows::core::Result<ITypeInfo> {
+        Err(windows::Win32::Foundation::E_NOTIMPL.into())
+    }
+
+    fn GetIDsOfNames(&self, _: *const GUID, _: *const PCWSTR, _: u32, _: u32, _: *mut i32) -> windows::core::Result<()> {
+        Err(windows::Win32::Foundation::E_NOTIMPL.into())
+    }
+
+    fn Invoke(
+        &self, member: i32, _: *const GUID, _: u32, _: DISPATCH_FLAGS, params: *const DISPPARAMS, _: *mut VARIANT,
+        _: *mut EXCEPINFO, _: *mut u32,
+    ) -> windows::core::Result<()> {
+        // Only note the command here: Visual Studio is waiting on this call, so calling back into
+        // it (to look up the command's name) could deadlock.
+        if member == AFTER_EXECUTE && !params.is_null() {
+            let params = unsafe { &*params };
+            if params.cArgs >= 2 && !params.rgvarg.is_null() {
+                // Arguments arrive last to first: Guid is the first argument, so the last slot.
+                let args = unsafe { std::slice::from_raw_parts(params.rgvarg, params.cArgs as usize) };
+                let n = args.len();
+                let guid = BSTR::try_from(&args[n - 1]).map(|s| s.to_string()).unwrap_or_default();
+                let id = i32::try_from(&args[n - 2]).unwrap_or_default();
+                let _ = self.sent.send(RanCommand { guid, id, at: epoch_ms() });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A subscription to Visual Studio's commands; unsubscribes when dropped.
+pub struct CommandWatch {
+    point: IConnectionPoint,
+    cookie: u32,
+    /// Visual Studio stops raising events once its events object is released.
+    _events: IUnknown,
+    pub ran: Receiver<RanCommand>,
+}
+
+impl CommandWatch {
+    /// Subscribes to every command `dte` runs, whether from a menu, a shortcut or automation.
+    pub fn start(dte: &Dispatch) -> Result<Self, String> {
+        // The all-zero GUID and ID 0 mean every command.
+        let events = dte.object("Events", &[])?.unknown("CommandEvents", &[VARIANT::from("{00000000-0000-0000-0000-000000000000}"), VARIANT::from(0)])?;
+        let (sent, ran) = channel();
+        let sink: IUnknown = CommandSink { sent }.into();
+        unsafe {
+            let container = events.cast::<IConnectionPointContainer>().map_err(err)?;
+            let point = container.FindConnectionPoint(&DispCommandEvents::IID).map_err(err)?;
+            let cookie = point.Advise(&sink).map_err(|e| format!("couldn't subscribe to Visual Studio's commands: {}", err(e)))?;
+            Ok(Self { point, cookie, _events: events, ran })
+        }
+    }
+}
+
+impl Drop for CommandWatch {
+    fn drop(&mut self) {
+        let _ = unsafe { self.point.Unadvise(self.cookie) };
+    }
+}
+
+/// A command's name ("Edit.ToggleWordWrap"), or `None` for unnamed internal commands.
+pub fn command_name(dte: &Dispatch, ran: &RanCommand) -> Option<String> {
+    let command = dte.object("Commands", &[]).ok()?.object("Item", &[VARIANT::from(ran.guid.as_str()), VARIANT::from(ran.id)]).ok()?;
+    command.string("Name").ok().filter(|n| !n.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +265,29 @@ mod tests {
         dte.call("ExecuteCommand", &[VARIANT::from("Edit.ToggleWordWrap")]).unwrap();
         dte.call("ExecuteCommand", &[VARIANT::from("Edit.ToggleWordWrap")]).unwrap();
         assert!(dte.call("ExecuteCommand", &[VARIANT::from("No.Such.Command")]).is_err());
+    }
+
+    /// Live: needs a running Visual Studio. Commands run through automation raise the same
+    /// events as ones from menus and shortcuts.
+    #[test]
+    #[ignore = "needs a running Visual Studio"]
+    fn hears_the_commands_visual_studio_runs() {
+        unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED).ok().unwrap() };
+        let pid = crate::target::process_ids("devenv.exe").into_iter().next().expect("start Visual Studio first");
+        let dte = find(pid).unwrap();
+        // Word wrap needs an open text editor.
+        let file = concat!(env!("CARGO_MANIFEST_DIR"), r"\src\take.rs");
+        dte.object("ItemOperations", &[]).unwrap().call("OpenFile", &[VARIANT::from(file)]).unwrap();
+        let watch = CommandWatch::start(&dte).unwrap();
+        dte.call("ExecuteCommand", &[VARIANT::from("Edit.ToggleWordWrap")]).unwrap();
+        dte.call("ExecuteCommand", &[VARIANT::from("Edit.ToggleWordWrap")]).unwrap();
+        let heard: Vec<String> = std::iter::from_fn(|| watch.ran.recv_timeout(Duration::from_secs(3)).ok())
+            .filter_map(|ran| command_name(&dte, &ran))
+            .collect();
+        eprintln!("heard: {heard:?}");
+        assert_eq!(heard.iter().filter(|n| *n == "Edit.ToggleWordWrap").count(), 2, "{heard:?}");
+        drop(watch);
+        dte.call("ExecuteCommand", &[VARIANT::from("Edit.ToggleWordWrap")]).unwrap();
+        dte.call("ExecuteCommand", &[VARIANT::from("Edit.ToggleWordWrap")]).unwrap();
     }
 }

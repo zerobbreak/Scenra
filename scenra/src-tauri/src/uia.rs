@@ -110,6 +110,25 @@ fn rects(range: &IUIAutomationTextRange) -> Result<Vec<Rect>, String> {
     }
 }
 
+/// An element's runtime id: unique while it exists, new when it's created again.
+fn runtime_id(element: &IUIAutomationElement) -> Vec<i32> {
+    unsafe {
+        let Ok(array) = element.GetRuntimeId() else { return vec![] };
+        if array.is_null() {
+            return vec![];
+        }
+        let upper = SafeArrayGetUBound(array, 1).unwrap_or(-1);
+        let mut data: *mut std::ffi::c_void = std::ptr::null_mut();
+        let mut out = Vec::new();
+        if upper >= 0 && SafeArrayAccessData(array, &mut data).is_ok() {
+            out = std::slice::from_raw_parts(data as *const i32, (upper + 1) as usize).to_vec();
+            let _ = SafeArrayUnaccessData(array);
+        }
+        let _ = SafeArrayDestroy(array);
+        out
+    }
+}
+
 /// A UI Automation client. COM must be initialised on the calling thread.
 pub struct Uia(IUIAutomation);
 
@@ -195,6 +214,25 @@ impl Uia {
                         }
                     }
                     return Some(texts);
+                }
+            }
+        }
+        None
+    }
+
+    /// The first text block in window `hwnd` whose text starts with `prefix`, with the element's
+    /// runtime id (it changes when the element is created again, e.g. results redrawn).
+    pub fn text_starting(&self, hwnd: HWND, prefix: &str) -> Option<(String, Vec<i32>)> {
+        unsafe {
+            let root = self.0.ElementFromHandle(hwnd).ok()?;
+            let condition = self.0.CreatePropertyCondition(UIA_ClassNamePropertyId, &VARIANT::from("TextBlock")).ok()?;
+            let found = root.FindAll(TreeScope_Descendants, &condition).ok()?;
+            for i in 0..found.Length().unwrap_or(0) {
+                let Ok(element) = found.GetElement(i) else { continue };
+                let Ok(name) = element.CurrentName() else { continue };
+                let name = name.to_string();
+                if name.starts_with(prefix) {
+                    return Some((name, runtime_id(&element)));
                 }
             }
         }

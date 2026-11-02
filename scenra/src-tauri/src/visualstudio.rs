@@ -429,9 +429,169 @@ pub fn capture_position(pid: u32, vs: &VisualStudio) -> Result<steps::Position, 
     })
 }
 
+// ---- Teach ------------------------------------------------------------------------------------
+
+/// Commands that edit text, move the caret, use the clipboard, save, or open search and go-to
+/// boxes. They aren't steps: what they lead to (a file, a scroll, a selection, a search) is.
+pub fn ignored_command(name: &str) -> bool {
+    const PREFIXES: [&str; 14] = [
+        "Edit.Char", "Edit.Word", "Edit.Line", "Edit.Page", "Edit.Document", "Edit.Scroll", "Edit.Select", "Edit.Delete",
+        "Edit.Type", "Edit.Break", "Edit.Insert", "Edit.Tab", "Edit.GoTo", "Edit.Find",
+    ];
+    const EXACT: [&str; 13] = [
+        "Edit.Undo", "Edit.Redo", "Edit.Copy", "Edit.Cut", "Edit.Paste", "Edit.Replace", "Edit.ReplaceinFiles",
+        "File.OpenFile", "File.SaveSelectedItems", "File.SaveAll", "Window.ActivateDocumentWindow", "Edit.CollapseTag", "Edit.Escape",
+    ];
+    PREFIXES.iter().any(|p| name.starts_with(p)) || EXACT.contains(&name)
+}
+
+/// Reads Visual Studio for Teach: snapshots of the editor, the commands it runs, and searches.
+/// Lives on the recorder thread (its COM objects stay there).
+pub struct TeachWatch {
+    ctx: Ctx,
+    commands: dte::CommandWatch,
+    /// Queries of searches run, from the search thread.
+    searches: std::sync::mpsc::Receiver<String>,
+    stop_searches: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    search_thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for TeachWatch {
+    fn drop(&mut self) {
+        self.stop_searches.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// How often the search thread looks at the Find Results window (a look takes about 0.7 s).
+const SEARCH_POLL: Duration = Duration::from_secs(1);
+
+impl TeachWatch {
+    pub fn start(pid: u32, vs: &VisualStudio) -> Result<Self, String> {
+        let ctx = Ctx::new(pid, vs)?;
+        let commands = dte::CommandWatch::start(&ctx.dte)?;
+        let (found, searches) = std::sync::mpsc::channel();
+        let stop_searches = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stopping = stop_searches.clone();
+        // Its own thread and UI Automation client: looking through the results window is slow,
+        // and the editor is polled every 200 ms.
+        let window = ctx.window.0 as isize;
+        let search_thread = std::thread::Builder::new()
+            .name("scenra-teach-vs-search".into())
+            .spawn(move || {
+                com();
+                let Ok(uia) = Uia::new() else { return };
+                let window = windows::Win32::Foundation::HWND(window as *mut _);
+                // A search already in the results when teaching starts isn't one.
+                let mut last = uia.text_starting(window, SEARCH_SUMMARY);
+                loop {
+                    // Checked after the look, so a search made just before Stop still counts.
+                    let stop = stopping.load(std::sync::atomic::Ordering::SeqCst);
+                    let now = uia.text_starting(window, SEARCH_SUMMARY);
+                    if now.is_some() && now != last {
+                        if let Some(query) = now.as_ref().and_then(|(text, _)| search_query(text)) {
+                            let _ = found.send(query);
+                        }
+                        last = now;
+                    }
+                    if stop {
+                        break;
+                    }
+                    std::thread::sleep(SEARCH_POLL);
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(Self { ctx, commands, searches, stop_searches, search_thread: Some(search_thread) })
+    }
+
+    /// The editor now, in the form the code-step watcher compares.
+    pub fn snapshot(&self) -> Result<crate::teach_code::Snapshot, String> {
+        let c = &self.ctx;
+        let file = active_file(&c.dte);
+        let (mut top, mut visible, mut selected) = (None, None, Vec::new());
+        if file.is_some()
+            && let Ok(view) = c.view()
+        {
+            let bottom = view.area.y + view.area.height + 1.0;
+            let inside: Vec<u32> = view.lines.iter().filter(|l| l.rect.y >= view.area.y - 1.0 && l.rect.y + l.rect.height <= bottom).map(|l| l.number).collect();
+            top = top_line(&view.lines, &view.area);
+            visible = inside.first().zip(inside.last()).map(|(a, b)| (*a, *b));
+            // DTE knows the whole selection, on screen or not.
+            let selection = c.dte.object("ActiveDocument", &[])?.object("Selection", &[])?;
+            if !bool::try_from(&selection.get("IsEmpty")?).unwrap_or(true) {
+                let (first, last) = c.selected_lines()?;
+                selected = (first..=last).collect();
+            }
+        }
+        let state = InitialState {
+            url: URL.into(),
+            headings: vec![],
+            dialogs: vec![],
+            code: Some(CodeState { uri: file.as_deref().map(path_to_uri), top, panel: String::new() }),
+        };
+        Ok(crate::teach_code::Snapshot { state, selected, visible, shown: None })
+    }
+
+    /// Commands Visual Studio ran since the last call, by name, without the ignored ones.
+    pub fn commands(&self) -> Vec<(f64, String)> {
+        self.commands
+            .ran
+            .try_iter()
+            .filter_map(|ran| dte::command_name(&self.ctx.dte, &ran).map(|name| (ran.at, name)))
+            .filter(|(_, name)| !ignored_command(name))
+            .collect()
+    }
+
+    /// The query of a search run since the last call. Visual Studio 2026's Find in Files
+    /// doesn't update DTE's Find object and raises no named command; the Find Results window's
+    /// summary ("Find all "fn stop", Entire Workspace, …") is drawn anew for each search, with a
+    /// new runtime id even when the text is the same.
+    pub fn new_search(&mut self) -> Option<String> {
+        self.searches.try_recv().ok()
+    }
+
+    /// At Stop: one last look for a search, then the searches not yet collected.
+    pub fn last_searches(&mut self) -> Vec<String> {
+        self.stop_searches.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(thread) = self.search_thread.take() {
+            let _ = thread.join();
+        }
+        self.searches.try_iter().collect()
+    }
+}
+
+/// How the Find Results window's summary line starts.
+const SEARCH_SUMMARY: &str = "Find all \"";
+
+/// `Find all "fn stop", Entire Workspace, …` → `fn stop`.
+pub fn search_query(summary: &str) -> Option<String> {
+    let rest = summary.strip_prefix("Find all \"")?;
+    let end = rest.rfind("\", ").unwrap_or(rest.rfind('"')?);
+    Some(rest[..end].to_owned()).filter(|q| !q.trim().is_empty())
+}
+
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_query_comes_from_the_results_summary() {
+        assert_eq!(search_query("Find all \"fn stop\", Entire Workspace, Additional files might be excluded. Manage exclusions").as_deref(), Some("fn stop"));
+        assert_eq!(search_query("Find all \"say \"hi\"\", Current document").as_deref(), Some("say \"hi\""));
+        assert_eq!(search_query("Find all \"\", Entire Workspace"), None);
+        assert_eq!(search_query("Replace all \"x\", Entire Workspace"), None);
+    }
+
+    #[test]
+    fn editing_and_navigation_commands_arent_steps() {
+        for name in ["Edit.LineDown", "Edit.CharLeft", "Edit.Paste", "Edit.GoToFindCombo", "Edit.FindinFiles", "File.SaveAll", "Edit.Undo"] {
+            assert!(ignored_command(name), "{name}");
+        }
+        for name in ["Edit.ToggleWordWrap", "View.SolutionExplorer", "Edit.FormatDocument", "View.NavigateBackward"] {
+            assert!(!ignored_command(name), "{name}");
+        }
+    }
 
     #[test]
     fn the_view_fills_in_empty_lines() {
@@ -514,6 +674,100 @@ mod tests {
         crate::page::check_initial(&expected, &state(pid).unwrap()).unwrap();
         restore_state(pid, &vs, &CodeState { uri: None, top: None, panel: String::new() }).unwrap();
         assert_eq!(code().uri, None);
+    }
+
+    /// Live: teach a code walkthrough in the Visual Studio running on this repo (Scenra's input
+    /// stands in for the presenter), draft it with a stand-in AI, restore the scene start, replay.
+    #[test]
+    #[ignore = "needs a running Visual Studio; moves the real mouse and keyboard"]
+    fn teaches_and_replays_in_visual_studio() {
+        use crate::teach::StepFlag;
+        use windows::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext};
+        unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+        com();
+        let pid = crate::target::process_ids("devenv.exe").into_iter().next().expect("start Visual Studio on this repo first");
+        let repo = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let repo = PathBuf::from(repo.canonicalize().unwrap().to_string_lossy().trim_start_matches(r"\\?\"));
+        let vs = VisualStudio { exe: find_exe().unwrap(), folder: repo.clone() };
+        let take = "scenra/src-tauri/src/take.rs";
+        let text = std::fs::read_to_string(repo.join(take)).unwrap();
+        let stop = text.lines().position(|l| l.trim_start().starts_with("pub(crate) fn stop(")).unwrap() as u32 + 1;
+        let at = steps::Anchor { line: stop, text: text.lines().nth(stop as usize - 1).unwrap().trim().into(), symbol: None };
+        let settle = || std::thread::sleep(Duration::from_millis(1800));
+        let act = |step: Step| {
+            approach(pid, &vs, &step, Pace::Natural).unwrap();
+            run(pid, &vs, &step, Pace::Natural).unwrap_or_else(|e| panic!("{}: {e}", step.describe()));
+            settle();
+        };
+        restore_state(pid, &vs, &CodeState { uri: Some(path_to_uri(&repo.join("README.md"))), top: Some(1), panel: String::new() }).unwrap();
+        settle();
+
+        let (sent, seen) = std::sync::mpsc::channel();
+        let recorder = crate::teach::VsRecorder::start(pid, vs.clone(), move |s| {
+            let _ = sent.send(s.label.clone());
+        })
+        .unwrap();
+        settle();
+        act(Step::Open { path: take.into(), line: None, instant: false });
+        act(Step::Scroll { path: take.into(), at: at.clone(), lines: 6 });
+        act(Step::Highlight { path: take.into(), at: at.clone(), lines: 3 });
+        act(Step::Palette { command: "Edit.ToggleWordWrap".into() });
+        std::thread::sleep(Duration::from_secs(2)); // a command waits to see whether the editor shows it
+        act(Step::Search { query: "fn stop".into() });
+        input::chord(&[windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE]).unwrap();
+        let session = recorder.stop().unwrap();
+        let live: Vec<String> = seen.try_iter().collect();
+        for s in &session.steps {
+            eprintln!("{:>2}. {:<44} {:?} {:?}", s.index + 1, s.label, s.flags, s.before.code.as_ref().map(|c| (&c.uri, c.top)));
+        }
+        eprintln!("warnings: {:?}", session.warnings);
+        // Undo the taught word-wrap toggle.
+        Ctx::new(pid, &vs).unwrap().command("Edit.ToggleWordWrap").unwrap();
+
+        let kinds: Vec<&str> = session
+            .steps
+            .iter()
+            .map(|s| match (&s.step, s.flags.first()) {
+                (Some(Step::Open { .. }), _) => "open",
+                (Some(Step::Scroll { .. }), _) => "scroll",
+                (Some(Step::Highlight { .. }), _) => "highlight",
+                (Some(Step::Search { .. }), _) => "search",
+                (Some(Step::Palette { .. }), _) => "palette",
+                (None, Some(StepFlag::Shortcut)) => "shortcut",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds, ["open", "scroll", "highlight", "palette", "search"], "{:?}", session.steps);
+        assert!(live.len() >= 4, "steps should arrive live: {live:?}");
+        let Some(Step::Highlight { at: taught, lines, .. }) = &session.steps[2].step else { unreachable!() };
+        assert_eq!((taught.line, *lines), (stop, 3));
+        assert_eq!(session.steps[3].step, Some(Step::Palette { command: "Edit.ToggleWordWrap".into() }));
+        assert_eq!(session.steps[4].step, Some(Step::Search { query: "fn stop".into() }));
+
+        let provider = crate::ai::Scripted(vec![(
+            "Code tour",
+            vec![
+                ("Let's open the take module and scroll down to stop.", vec![("open", "s0"), ("scroll", "s1")]),
+                ("Here are the lines that matter, so let's wrap and search.", vec![("lines", "s2"), ("wrap", "s3"), ("search", "s4")]),
+            ],
+        )]);
+        let (script, states) = crate::script::draft_from_session(&provider, &session, "a code tour").unwrap();
+        let actions: Vec<Step> = script.scenes[0].lines.iter().flat_map(|l| l.actions.iter().map(|a| a.step.clone().unwrap())).collect();
+        assert_eq!(actions.len(), 5);
+
+        // Replay: back to the scene start, check it, run every step.
+        let start = states[0].code.clone().unwrap();
+        restore_state(pid, &vs, &start).unwrap();
+        crate::page::check_initial(&states[0], &state(pid).unwrap()).unwrap_or_else(|e| panic!("scene start not restored: {e}"));
+        let c = Ctx::new(pid, &vs).unwrap();
+        for step in &actions {
+            act(step.clone());
+            if matches!(step, Step::Highlight { .. }) {
+                assert_eq!(c.selected_lines().unwrap(), (stop, stop + 2), "replayed highlight");
+            }
+        }
+        input::chord(&[windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE]).unwrap();
+        c.command("Edit.ToggleWordWrap").unwrap();
     }
 
     /// Live: needs a Visual Studio running on this repo.

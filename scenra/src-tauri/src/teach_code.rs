@@ -193,6 +193,14 @@ impl<R: Fn(&Path) -> Option<String>> Watcher<R> {
         Ok(Some(CodeChange { at: raw.at, before: raw.before, label: step.describe(), step: Some(step), flags: vec![] }))
     }
 
+    /// A named command Visual Studio ran (from a menu, a shortcut or Feature Search). Like a
+    /// VS Code shortcut it waits: if the editor shows its effect, that step stands for it;
+    /// otherwise it becomes a Palette step, which replays by name.
+    pub fn command(&mut self, at: f64, before: InitialState, name: String) {
+        let step = Step::Palette { command: name };
+        self.shortcuts.push(CodeChange { at, before, label: step.describe(), step: Some(step), flags: vec![] });
+    }
+
     /// Steps that were waiting (shortcuts, an unsettled scroll or selection), at Stop.
     pub fn finish(&mut self, now: f64) -> Vec<CodeChange> {
         let mut out = match self.latest.clone() {
@@ -444,6 +452,23 @@ mod tests {
         assert!(hold(&mut w, snap(Some("src/lib.rs"), 5, &[]), 5200.0, 1000.0).is_empty());
         let steps = hold(&mut w, snap(Some("src/lib.rs"), 5, &[]), 6400.0, 1400.0);
         assert_eq!((steps.len(), steps[0].label.as_str(), steps[0].flags.as_slice()), (1, "Ctrl+B", &[StepFlag::Shortcut][..]));
+    }
+
+    #[test]
+    fn visual_studio_commands_replay_unless_the_editor_shows_them() {
+        let mut w = watcher();
+        hold(&mut w, snap(Some("README.md"), 1, &[]), 0.0, 400.0);
+        let before = snap(Some("README.md"), 1, &[]).state;
+        // Navigate Backward opened another file: the Open step stands for it.
+        w.command(500.0, before.clone(), "View.NavigateBackward".into());
+        let steps = hold(&mut w, snap(Some("src/lib.rs"), 1, &[]), 600.0, 4000.0);
+        assert_eq!(steps.len(), 1, "{steps:?}");
+        assert!(matches!(steps[0].step, Some(Step::Open { .. })));
+        // Word wrap changes nothing Scenra tracks: kept as a replayable command.
+        w.command(5000.0, before, "Edit.ToggleWordWrap".into());
+        let steps = hold(&mut w, snap(Some("src/lib.rs"), 1, &[]), 5200.0, 3000.0);
+        assert_eq!(steps.len(), 1, "{steps:?}");
+        assert_eq!((steps[0].step.clone(), steps[0].flags.is_empty()), (Some(Step::Palette { command: "Edit.ToggleWordWrap".into() }), true));
     }
 
     #[test]

@@ -29,3 +29,5 @@ base64 = "0.23.1"
 windows-capture = "2.0.1"
 wasapi = "0.26.0"
 windows-future = "0.3.2"
+# The `implement` and `interface` macros (COM callbacks, dte.rs) refer to it by name.
+windows-core = "0.62.2"
