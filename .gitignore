@@ -13,3 +13,6 @@ recordings/
 
 # Local working notes, not shared
 context/PROGRESS-TRACKER.md
+
+# Visual Studio workspace cache (created when Scenra drives Visual Studio on this repo)
+.vs/

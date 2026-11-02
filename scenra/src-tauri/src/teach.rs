@@ -291,8 +291,28 @@ struct Attached {
     watcher: Option<CodeWatcher>,
 }
 
+/// A running walkthrough capture: on a web page or VS Code (over CDP), or in Visual Studio.
+pub enum Recorder {
+    Page(PageRecorder),
+    VisualStudio(VsRecorder),
+}
+
+impl Recorder {
+    /// Teaching on a CDP page; `codebase` is VS Code's folder when the page is VS Code.
+    pub fn start(port: u16, codebase: Option<PathBuf>, on_step: impl Fn(&TeachStep) + Send + 'static) -> Result<Self, String> {
+        PageRecorder::start(port, codebase, on_step).map(Recorder::Page)
+    }
+
+    pub fn stop(self) -> Result<TeachSession, String> {
+        match self {
+            Recorder::Page(r) => r.stop(),
+            Recorder::VisualStudio(r) => r.stop(),
+        }
+    }
+}
+
 /// A running walkthrough capture against one CDP page.
-pub struct Recorder {
+pub struct PageRecorder {
     port: u16,
     stop: Arc<AtomicBool>,
     start: InitialState,
@@ -300,7 +320,7 @@ pub struct Recorder {
     thread: JoinHandle<Result<Attached, String>>,
 }
 
-impl Recorder {
+impl PageRecorder {
     /// Injects the listener and starts collecting clicks, or in VS Code (`codebase` is its
     /// folder) code steps. `on_step` runs on the recorder thread for each step as it arrives
     /// (provisional index: arrival order).
@@ -402,6 +422,101 @@ impl Recorder {
     }
 }
 
+/// Teaching in Visual Studio: a thread polls the editor (open file, scroll, selection) and the
+/// last search, and hears every named command through DTE's command events.
+pub struct VsRecorder {
+    stop: Arc<AtomicBool>,
+    start: InitialState,
+    thread: JoinHandle<Result<VsTaught, String>>,
+}
+
+/// What the Visual Studio recorder thread hands back: steps, warnings, and the editor at Stop.
+type VsTaught = (Vec<TeachStep>, Vec<String>, InitialState);
+
+impl VsRecorder {
+    pub fn start(pid: u32, vs: crate::visualstudio::VisualStudio, on_step: impl Fn(&TeachStep) + Send + 'static) -> Result<Self, String> {
+        let start = crate::visualstudio::state(pid)?;
+        let started_ms = epoch_ms();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = stop.clone();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let folder = vs.folder.clone();
+        let mut last = start.clone();
+        let thread = std::thread::Builder::new()
+            .name("scenra-teach-vs".into())
+            .spawn(move || {
+                crate::visualstudio::com();
+                // COM objects stay on this thread, so the watch is made here.
+                let mut watch = match crate::visualstudio::TeachWatch::start(pid, &vs) {
+                    Ok(watch) => {
+                        let _ = ready_tx.send(Ok(()));
+                        watch
+                    }
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(e.clone()));
+                        return Err(e);
+                    }
+                };
+                let mut watcher = CodeWatcher::new(folder, read_file as fn(&Path) -> Option<String>);
+                let (mut steps, mut warnings) = (Vec::new(), Vec::new());
+                let push = |steps: &mut Vec<TeachStep>, found: Vec<crate::teach_code::CodeChange>| {
+                    for change in found {
+                        let mut step = step_from_change(change, started_ms);
+                        step.index = steps.len();
+                        on_step(&step);
+                        steps.push(step);
+                    }
+                };
+                loop {
+                    let stopping_now = stopping.load(Ordering::SeqCst);
+                    let now = epoch_ms();
+                    let before = last.clone();
+                    for (at, name) in watch.commands() {
+                        watcher.command(at, before.clone(), name);
+                    }
+                    if let Some(query) = watch.new_search() {
+                        let raw = crate::teach_code::RawKey { at: now, kind: "search".into(), text: query, before: before.clone() };
+                        if let Ok(Some(change)) = watcher.key(raw) {
+                            push(&mut steps, vec![change]);
+                        }
+                    }
+                    match watch.snapshot() {
+                        Ok(snap) => {
+                            last = snap.state.clone();
+                            let found = watcher.observe(snap, now);
+                            push(&mut steps, found);
+                        }
+                        // Visual Studio is busy (a dialog, loading): try again next time.
+                        Err(e) if !warnings.iter().any(|w| w == &e) && e.contains("isn't open") => warnings.push(e),
+                        Err(_) => {}
+                    }
+                    if stopping_now {
+                        break;
+                    }
+                    std::thread::sleep(POLL);
+                }
+                for query in watch.last_searches() {
+                    let raw = crate::teach_code::RawKey { at: epoch_ms(), kind: "search".into(), text: query, before: last.clone() };
+                    if let Ok(Some(change)) = watcher.key(raw) {
+                        push(&mut steps, vec![change]);
+                    }
+                }
+                let found = watcher.finish(epoch_ms());
+                push(&mut steps, found);
+                Ok((steps, warnings, last))
+            })
+            .map_err(|e| e.to_string())?;
+        ready_rx.recv().map_err(|_| "the Visual Studio recorder didn't start".to_owned())??;
+        Ok(Self { stop, start, thread })
+    }
+
+    pub fn stop(self) -> Result<TeachSession, String> {
+        self.stop.store(true, Ordering::SeqCst);
+        let (steps, warnings, end) = self.thread.join().map_err(|_| "the teach recorder crashed")??;
+        Ok(TeachSession { start: self.start, end, steps: finish(steps), warnings })
+    }
+}
+
 /// Each finished walkthrough is saved as `<app local data>/teach/<UTC stamp>/session.json`, so a
 /// restart doesn't lose it. The newest one that reads cleanly is loaded on launch.
 const SESSION_FILE: &str = "session.json";
@@ -496,6 +611,13 @@ pub fn start_teach(
     if take.is_recording() { return Err("Stop the current take before teaching".into()); }
     let mut active = teach.active.lock().map_err(|e| e.to_string())?;
     if active.is_some() { return Err("Teaching is already in progress".into()); }
+    // Visual Studio: code steps from DTE and UI Automation.
+    if let Ok((pid, vs)) = target::visual_studio(&targets) {
+        locate::restore_target(pid)?;
+        let recorder = VsRecorder::start(pid, vs, move |step| { let _ = app.emit("teach-step", step); })?;
+        *active = Some(Recorder::VisualStudio(recorder));
+        return Ok(());
+    }
     let (pid, port) = target::running(&targets)?;
     locate::restore_target(pid)?;
     // In VS Code, Teach records code steps against the codebase folder.

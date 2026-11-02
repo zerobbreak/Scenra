@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import Button from "./Button";
 import { openTeleprompter } from "./capture";
 import { AiStatus, Mode, Scenario, aiStatus, currentScript, draftScript, onScriptChanged, startSession, words } from "./script";
-import { launchChrome, launchTarget, launchVscode } from "./target";
+import { launchChrome, launchTarget, launchVisualStudio, launchVscode } from "./target";
 import ScriptEditor from "./ScriptEditor";
 import TeachPanel from "./TeachPanel";
 
@@ -108,7 +108,7 @@ export default function ScriptPanel() {
         <label className="sr-only" htmlFor="codebase">Codebase folder</label>
         <input
           id="codebase"
-          placeholder="Codebase folder for VS Code (blank = the last one)"
+          placeholder="Codebase folder for VS Code or Visual Studio (blank = the last one)"
           value={folder}
           onChange={(e) => setFolder(e.target.value)}
           className="min-w-0 flex-1 rounded-md bg-zinc-900 px-3 py-1.5 text-sm ring-1 ring-zinc-700 focus:ring-indigo-500 focus:outline-none"
@@ -126,6 +126,17 @@ export default function ScriptPanel() {
           }
         >
           Launch VS Code
+        </Button>
+        <Button
+          disabled={!!busy}
+          onClick={() =>
+            run("Launching Visual Studio… (up to a minute)", async () => {
+              await launchVisualStudio(folder);
+              setNote("Visual Studio attached. Write a script by hand below, with code steps.");
+            })
+          }
+        >
+          Launch Visual Studio
         </Button>
       </div>
 

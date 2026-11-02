@@ -1,0 +1,43 @@
+# ADR 0004: Visual Studio, Docker and Android Studio
+
+**Status:** Accepted, 2026-11-02. Visual Studio done (launch, steps, scene starts, Teach). Docker is next.
+
+## Context
+
+ADR 0003 made VS Code a first-class target. Presenters also need Visual Studio, Docker and Android Studio. The presenter chose (2026-11-02):
+
+- **Visual Studio and Android Studio:** the same feature set as VS Code: open a file, scroll to code, highlight lines, run a command, search, and Teach mode for all of it. Building, debugging and the Android emulator are out of scope for now.
+- **Docker:** both `docker` commands in a terminal and the Docker Desktop app.
+- **Order:** Visual Studio, then Docker, then Android Studio (not installed on the development machine yet).
+
+## Research (2026-11-02, this machine: Visual Studio Community 2026, 18.10)
+
+| Route | Test | Verdict |
+|---|---|---|
+| DTE (Visual Studio's COM automation), found in the Running Object Table as `!VisualStudio.DTE.18.0:<pid>` | Attached in about 1 s to `devenv` opened on a folder (no solution). `ItemOperations.OpenFile` 38 ms; `Selection.GotoLine` + `LineDown(extend)` selected 195–197 and read back `TopLine`/`BottomLine` and the text; `ExecuteCommand("Edit.ToggleWordWrap")` worked | Actions and the open file and selection |
+| DTE text window (`ActiveWindow.Object.ActivePane.StartPoint`) for the visible lines | Empty in both PowerShell 7 and 5.1: the document window exposes no `TextWindow` for a Rust file opened from a folder | Not usable |
+| UI Automation on the editor (`WpfTextView`, name "Text Editor") | Supports TextPattern. `GetVisibleRanges` returns one range per non-empty visible line, text `"<line number> <code>"`, each with its screen rectangle (a partly hidden top line has a shorter one). `GetSelection` returns the selected text with one rectangle per line. The document text itself has no numbers | Visible lines, the fractional top line and screen positions |
+
+## Decisions
+
+- **Visual Studio engine:** DTE for instant actions and state (open file, go to line, select, run a command, active document, selection); UI Automation's TextPattern for the visible lines and where they are on screen. On-camera motion uses real input, as in VS Code:
+  - **Open:** Ctrl+T opens the unified **Search Visual Studio** box in 2026 (not the old Go To All). Typing `f:<name>` filters to files; Scenra presses Enter only once the selected result's path is the file, otherwise it presses Escape and opens the file through DTE.
+  - **Scroll:** eased, calibrated wheel scrolling; a long jump goes most of the way first with `Edit.ScrollLineTop`.
+  - **Highlight:** click at column 0 of the first line, Shift+click at column 0 of the line after the last, then check the selection through DTE and correct it if a click landed a line off.
+  - **Palette:** runs the command by name through DTE, instantly. Feature Search (Ctrl+Q) mixes commands with settings and docs, so it can't pick one reliably.
+  - **Search:** Find in Files (Ctrl+Shift+F).
+- **Scene starts:** the open file and top line, restored through DTE (`OpenFile`, `GotoLine`, `Edit.ScrollLineTop`; `Window.CloseAllDocuments` for none). Visual Studio has no side-panel state in a scene.
+- **Settings:** Visual Studio runs with the presenter's own settings (the experimental instance resets everything). Replacing it as the target asks it to quit first, so it can prompt for unsaved files, and only kills it after 15 s.
+- **Visible lines:** Visual Studio's TextPattern also reports a few laid-out lines below the editor's edge; only lines inside the editor's rectangle count.
+- **Shared layers:** `dte.rs` (late-bound COM over `IDispatch`, retrying calls Visual Studio rejects while busy) and `uia.rs` (the UI Automation client). The UI Automation layer is also slice 3 of ADR 0003.
+- **Steps and anchors** are the same as VS Code's (`steps::Step`, text and symbol anchors), so scripts and Teach work the same across editors.
+
+## Teach in Visual Studio
+
+- **Editor end states** (Open, Scroll, Highlight) come from polling DTE and UI Automation every 200 ms into the same watcher as VS Code (`teach_code::Watcher`). DTE reports the whole selection, so a selection taller than the editor isn't a problem.
+- **Commands** come from DTE's command events (`_dispCommandEvents`, IID `FF2D5C12-FEEA-11D0-BBC8-00A0C90F2744` from `Microsoft.VisualStudio.Interop.dll`; `1DED92B5-…` is the events class, not the interface). The events object comes back as `IUnknown`, not `IDispatch`. The subscriber only queues the command's GUID and ID: Visual Studio waits on the call, so names are looked up afterwards on the recorder thread. Editing, caret, clipboard, save and find/go-to commands are ignored. Any other command waits like a VS Code shortcut: if the editor shows its effect, that step stands for it; otherwise it becomes a **Palette** step that replays by name. So in Visual Studio, shortcuts replay instead of being skipped.
+- **Searches:** Visual Studio 2026's Find in Files doesn't update `DTE.Find.FindWhat` and raises no named command. The Find Results window's summary line (`Find all "fn stop", Entire Workspace, …`) is redrawn for every search, with a new UI Automation runtime id even for the same text. Finding it takes about 0.7 s, so a separate thread checks once a second, with one last check at Stop.
+- **Development note:** Visual Studio 18.11 exits within seconds when started inside Claude Code's sandbox; live tests start it from a normal terminal.
+
+Verified live (`teaches_and_replays_in_visual_studio`, 44 s): teaching Open, Scroll, Highlight, Toggle Word Wrap and a Find in Files search recorded exactly those five steps; drafting, scene-start restore and check, and replay with the exact highlight all passed.
+

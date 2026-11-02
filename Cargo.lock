@@ -2781,6 +2781,7 @@ dependencies = [
  "wasapi",
  "windows",
  "windows-capture",
+ "windows-core",
  "windows-future",
 ]
 

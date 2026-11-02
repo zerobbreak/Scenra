@@ -299,6 +299,23 @@ pub(crate) fn focus_target(pid: u32) -> Result<(), String> {
     Err("Couldn't bring the app to the front for typing; click its window, then retry".into())
 }
 
+/// Brings window `top` of process `pid` to the front for typing, for apps without a Chromium
+/// content area (Visual Studio).
+pub(crate) fn focus_window(pid: u32, top: HWND) -> Result<(), String> {
+    if unsafe { IsIconic(top) }.as_bool() {
+        let _ = unsafe { ShowWindow(top, SW_RESTORE) };
+    }
+    for _ in 0..3 {
+        bring_to_front(top);
+        let mut owner = 0u32;
+        unsafe { GetWindowThreadProcessId(GetForegroundWindow(), Some(&mut owner)) };
+        if process_tree(pid).contains(&owner) {
+            return Ok(());
+        }
+    }
+    Err("Couldn't bring the app to the front for typing; click its window, then retry".into())
+}
+
 fn bring_to_front(top: HWND) {
     unsafe {
         // Already in front: nothing to raise, and no settle time to wait out (this runs on every

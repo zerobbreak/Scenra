@@ -62,7 +62,7 @@ pub fn prepare_scene(
     }
     let scene = request.scene;
     let states = initial.0.lock().map_err(|e| e.to_string())?.clone();
-    let (pid, port) = target::running(&targets)?;
+    let pid = target::running_pid(&targets)?;
     let _input = hooks::arm();
     let checkpoint = || -> Result<(), String> {
         if setup.is_cancelled(request.request_id) || app.get_webview_window(capture::TELEPROMPTER).is_none() {
@@ -80,13 +80,15 @@ pub fn prepare_scene(
     take.while_idle(|| {
         checkpoint()?;
         locate::restore_target(pid)?;
-        // A VS Code scene starts at a file, line and panel: restore those directly.
+        // A code scene (VS Code, Visual Studio) starts at a file, line and panel: restore those directly.
         if let Some(code) = states.get(scene).and_then(|s| s.code.as_ref()) {
             crate::steps::restore_state(&targets, code)?;
             checkpoint()?;
-            check_scene(port, &scenario, &states, scene)?;
+            let expected = states.get(scene).ok_or("This scene has no approved starting state")?;
+            page::check_initial(expected, &target::current_state(&targets)?)?;
             return Ok(SetupResult { actions_run: 0 });
         }
+        let (_, port) = target::running(&targets)?;
         replay_to_start(port, &scenario, &states, scene, checkpoint)
     })
 }
