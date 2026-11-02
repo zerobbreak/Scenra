@@ -22,6 +22,7 @@ mod target;
 mod teach;
 mod teach_code;
 mod uia;
+mod visualstudio;
 mod steps;
 mod vscode;
 
@@ -66,6 +67,7 @@ pub fn run() {
             target::launch_target,
             target::launch_chrome,
             target::launch_vscode,
+            target::launch_visual_studio,
             target::target_profile,
             target::stop_target,
             script::ai_status,

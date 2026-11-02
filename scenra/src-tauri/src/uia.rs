@@ -61,6 +61,26 @@ pub fn main_window(pid: u32) -> Option<HWND> {
     search.best.map(|b| b.1)
 }
 
+/// Every visible top-level window of process `pid`.
+pub fn windows_of(pid: u32) -> Vec<HWND> {
+    struct Search {
+        pid: u32,
+        found: Vec<HWND>,
+    }
+    unsafe extern "system" fn top(hwnd: HWND, data: LPARAM) -> BOOL {
+        let search = unsafe { &mut *(data.0 as *mut Search) };
+        let mut owner = 0;
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut owner)) };
+        if owner == search.pid && unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            search.found.push(hwnd);
+        }
+        true.into()
+    }
+    let mut search = Search { pid, found: Vec::new() };
+    let _ = unsafe { EnumWindows(Some(top), LPARAM(&mut search as *mut Search as isize)) };
+    search.found
+}
+
 /// `"195 pub(crate) fn stop(…"` → line 195 and its code. Visual Studio prefixes each visible
 /// line's accessible text with its number and one space.
 pub fn split_numbered(text: &str) -> Option<(u32, &str)> {
@@ -145,6 +165,40 @@ impl Uia {
             }
         }
         Ok((text, all))
+    }
+
+    /// The texts inside the selected list item in any of process `pid`'s windows (a search
+    /// popup is a window of its own), or `None` while there isn't one.
+    pub fn selected_item_texts(&self, pid: u32) -> Option<Vec<String>> {
+        use windows::Win32::UI::Accessibility::{IUIAutomationSelectionItemPattern, TreeScope_Subtree, UIA_ControlTypePropertyId, UIA_ListItemControlTypeId, UIA_SelectionItemPatternId};
+        unsafe {
+            let items = self.0.CreatePropertyCondition(UIA_ControlTypePropertyId, &VARIANT::from(UIA_ListItemControlTypeId.0)).ok()?;
+            let any = self.0.CreateTrueCondition().ok()?;
+            for hwnd in windows_of(pid) {
+                let Ok(root) = self.0.ElementFromHandle(hwnd) else { continue };
+                let Ok(found) = root.FindAll(TreeScope_Descendants, &items) else { continue };
+                for i in 0..found.Length().unwrap_or(0) {
+                    let Ok(item) = found.GetElement(i) else { continue };
+                    let selected = item
+                        .GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(UIA_SelectionItemPatternId)
+                        .and_then(|p| p.CurrentIsSelected())
+                        .is_ok_and(|s| s.as_bool());
+                    if !selected {
+                        continue;
+                    }
+                    let mut texts = Vec::new();
+                    if let Ok(inside) = item.FindAll(TreeScope_Subtree, &any) {
+                        for j in 0..inside.Length().unwrap_or(0) {
+                            if let Ok(name) = inside.GetElement(j).and_then(|e| e.CurrentName()) {
+                                texts.push(name.to_string());
+                            }
+                        }
+                    }
+                    return Some(texts);
+                }
+            }
+        }
+        None
     }
 
     /// The element's screen rectangle.

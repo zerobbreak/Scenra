@@ -1,6 +1,6 @@
 # ADR 0004: Visual Studio, Docker and Android Studio
 
-**Status:** Accepted, 2026-11-02. Visual Studio is in progress.
+**Status:** Accepted, 2026-11-02. Visual Studio: launch, steps and scene starts done; Teach is next.
 
 ## Context
 
@@ -20,6 +20,14 @@ ADR 0003 made VS Code a first-class target. Presenters also need Visual Studio, 
 
 ## Decisions
 
-- **Visual Studio engine:** DTE for instant actions and state (open file, go to line, select, run a command, active document, selection); UI Automation's TextPattern for the visible lines and where they are on screen. On-camera motion uses real input, as in VS Code: eased wheel scrolling, clicks in the line-number margin for a highlight, **Go To All** (Ctrl+T) to open a file, **Feature Search** (Ctrl+Q) for commands, **Find in Files** (Ctrl+Shift+F) for search.
+- **Visual Studio engine:** DTE for instant actions and state (open file, go to line, select, run a command, active document, selection); UI Automation's TextPattern for the visible lines and where they are on screen. On-camera motion uses real input, as in VS Code:
+  - **Open:** Ctrl+T opens the unified **Search Visual Studio** box in 2026 (not the old Go To All). Typing `f:<name>` filters to files; Scenra presses Enter only once the selected result's path is the file, otherwise it presses Escape and opens the file through DTE.
+  - **Scroll:** eased, calibrated wheel scrolling; a long jump goes most of the way first with `Edit.ScrollLineTop`.
+  - **Highlight:** click at column 0 of the first line, Shift+click at column 0 of the line after the last, then check the selection through DTE and correct it if a click landed a line off.
+  - **Palette:** runs the command by name through DTE, instantly. Feature Search (Ctrl+Q) mixes commands with settings and docs, so it can't pick one reliably.
+  - **Search:** Find in Files (Ctrl+Shift+F).
+- **Scene starts:** the open file and top line, restored through DTE (`OpenFile`, `GotoLine`, `Edit.ScrollLineTop`; `Window.CloseAllDocuments` for none). Visual Studio has no side-panel state in a scene.
+- **Settings:** Visual Studio runs with the presenter's own settings (the experimental instance resets everything). Replacing it as the target asks it to quit first, so it can prompt for unsaved files, and only kills it after 15 s.
+- **Visible lines:** Visual Studio's TextPattern also reports a few laid-out lines below the editor's edge; only lines inside the editor's rectangle count.
 - **Shared layers:** `dte.rs` (late-bound COM over `IDispatch`, retrying calls Visual Studio rejects while busy) and `uia.rs` (the UI Automation client). The UI Automation layer is also slice 3 of ADR 0003.
 - **Steps and anchors** are the same as VS Code's (`steps::Step`, text and symbol anchors), so scripts and Teach work the same across editors.

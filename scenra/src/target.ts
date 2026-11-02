@@ -16,7 +16,7 @@ export type CapabilityProfile = {
   application: string;
   process: { pid: number; exe: string };
   capabilities: { cdp: CdpCapability };
-  preferredLocator: "cdp" | null;
+  preferredLocator: "cdp" | "dte" | null;
   warnings: string[];
 };
 
@@ -26,3 +26,6 @@ export const stopTarget = () => invoke<void>("stop_target");
 export const launchChrome = (url: string) => invoke<CapabilityProfile>("launch_chrome", { url });
 /** VS Code on the codebase folder (or the saved one), with Scenra's recording profile. */
 export const launchVscode = (folder?: string) => invoke<CapabilityProfile>("launch_vscode", { folder: folder || null });
+/** Visual Studio on the codebase folder (or the saved one); waits until it accepts automation. */
+export const launchVisualStudio = (folder?: string) =>
+  invoke<CapabilityProfile>("launch_visual_studio", { folder: folder || null });

@@ -249,6 +249,9 @@ fn hover_editor(c: &mut Ctx, pace: Pace) -> Result<(ScreenMap, View), String> {
 /// Gets ready ahead of the trigger word: for scroll and highlight, the cursor moves over the
 /// editor so only the scroll or click is left for the word itself.
 pub fn approach(targets: &LaunchedTarget, step: &Step, pace: Pace) -> Result<(), String> {
+    if let Ok((pid, vs)) = target::visual_studio(targets) {
+        return crate::visualstudio::approach(pid, &vs, step, pace);
+    }
     match step {
         Step::Scroll { .. } | Step::Highlight { .. } => {
             let mut c = ctx(targets)?;
@@ -277,6 +280,9 @@ fn file_name(file: &Path) -> String {
 }
 
 pub fn run(targets: &LaunchedTarget, step: &Step, pace: Pace) -> Result<(), String> {
+    if let Ok((pid, vs)) = target::visual_studio(targets) {
+        return crate::visualstudio::run(pid, &vs, step, pace);
+    }
     let mut c = ctx(targets)?;
     // Keys must reach VS Code, not whichever window happens to be in front.
     locate::focus_target(c.pid)?;
@@ -299,6 +305,9 @@ pub fn run(targets: &LaunchedTarget, step: &Step, pace: Pace) -> Result<(), Stri
 
 /// Puts VS Code back where a scene starts, instantly: the file at its top line, and the side panel.
 pub fn restore_state(targets: &LaunchedTarget, want: &page::CodeState) -> Result<(), String> {
+    if let Ok((pid, vs)) = target::visual_studio(targets) {
+        return crate::visualstudio::restore_state(pid, &vs, want);
+    }
     let mut c = ctx(targets)?;
     locate::focus_target(c.pid)?;
     if let Some(file) = want.uri.as_deref().and_then(uri_to_path) {
@@ -475,7 +484,7 @@ fn scroll_to(c: &mut Ctx, file: &Path, first: u32, count: u32, pace: Pace) -> Re
 }
 
 /// Sends wheel units for `lines` (positive = down) over an eased duration at about SCROLL_SPEED.
-fn ease_wheel(lines: f64, per_unit: f64) -> Result<(), String> {
+pub(crate) fn ease_wheel(lines: f64, per_unit: f64) -> Result<(), String> {
     let total_units = -lines / per_unit;
     let seconds = (lines.abs() / SCROLL_SPEED).clamp(0.35, 12.0);
     let start = Instant::now();
@@ -611,6 +620,9 @@ pub(crate) fn relative_to(folder: &Path, file: &Path) -> Option<String> {
 /// Reads VS Code's open file and selection (or cursor line) into a step position.
 #[tauri::command(async)]
 pub fn capture_code_position(targets: tauri::State<'_, LaunchedTarget>) -> Result<Position, String> {
+    if let Ok((pid, vs)) = target::visual_studio(&targets) {
+        return crate::visualstudio::capture_position(pid, &vs);
+    }
     let mut c = ctx(&targets)?;
     let v = c.session.evaluate(SELECTION_JS)?;
     if v.is_null() {

@@ -149,9 +149,8 @@ pub fn set_script(
             };
         }
     }
-    let (pid, port) = target::running(&targets)?;
-    crate::locate::restore_target(pid)?;
-    let state = page::initial_state(&mut page::page_session(port)?)?;
+    crate::locate::restore_target(target::running_pid(&targets)?)?;
+    let state = target::current_state(&targets)?;
     *initial.0.lock().map_err(err)? = vec![state; scenario.scenes.len()];
     *script.0.lock().map_err(err)? = Some(scenario.clone());
     app.emit("script-changed", &scenario).map_err(err)?;
@@ -345,8 +344,12 @@ pub fn check_scene_start(
     let scene_index = scene;
     let scene = scenario.scenes.get(scene_index).ok_or("Unknown scene")?;
     let expected = initial.0.lock().map_err(err)?.get(scene_index).cloned().ok_or("Draft a script to capture its starting page")?;
-    let (pid, port) = target::running(&targets)?;
-    crate::locate::restore_target(pid)?;
+    crate::locate::restore_target(target::running_pid(&targets)?)?;
+    // Visual Studio has no page: compare its open file and top line.
+    if target::visual_studio(&targets).is_ok() {
+        return page::check_initial(&expected, &target::current_state(&targets)?);
+    }
+    let (_, port) = target::running(&targets)?;
     page::wait_until_settled(port, std::time::Duration::from_secs(15))?;
     let mut page = page::page_session(port)?;
     page::check_initial(&expected, &page::initial_state(&mut page)?)?;
@@ -363,11 +366,11 @@ pub fn reset_scene_page(
     targets: State<'_, LaunchedTarget>, initial: State<'_, ScriptInitialState>, scene: usize,
 ) -> Result<(), String> {
     let expected = initial.0.lock().map_err(err)?.get(scene).cloned().ok_or("Draft a script first")?;
-    let (pid, port) = target::running(&targets)?;
-    crate::locate::restore_target(pid)?;
+    crate::locate::restore_target(target::running_pid(&targets)?)?;
     if let Some(code) = &expected.code {
         return crate::steps::restore_state(&targets, code);
     }
+    let (_, port) = target::running(&targets)?;
     page::restore_url(port, &expected.url, std::time::Duration::from_secs(15), &|| Ok(()))
 }
 
@@ -379,14 +382,18 @@ pub fn approve_scene_start(
 ) -> Result<(), String> {
     let scenario = script.0.lock().map_err(err)?.clone().ok_or("Draft a script first")?;
     let selected = scenario.scenes.get(scene).ok_or("Unknown scene")?;
-    let (pid, port) = target::running(&targets)?;
-    crate::locate::restore_target(pid)?;
-    page::wait_until_settled(port, std::time::Duration::from_secs(15))?;
-    let mut page = page::page_session(port)?;
-    if let Some(action) = selected.lines.iter().flat_map(|l| &l.actions).next().filter(|a| a.step.is_none()) {
-        page::check_control(&mut page, &action.target)?;
-    }
-    let baseline = page::initial_state(&mut page)?;
+    crate::locate::restore_target(target::running_pid(&targets)?)?;
+    let baseline = if target::visual_studio(&targets).is_ok() {
+        target::current_state(&targets)?
+    } else {
+        let (_, port) = target::running(&targets)?;
+        page::wait_until_settled(port, std::time::Duration::from_secs(15))?;
+        let mut page = page::page_session(port)?;
+        if let Some(action) = selected.lines.iter().flat_map(|l| &l.actions).next().filter(|a| a.step.is_none()) {
+            page::check_control(&mut page, &action.target)?;
+        }
+        page::initial_state(&mut page)?
+    };
     let mut states = initial.0.lock().map_err(err)?;
     *states.get_mut(scene).ok_or("Draft a script first")? = baseline;
     Ok(())

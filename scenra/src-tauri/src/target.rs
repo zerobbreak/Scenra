@@ -38,9 +38,33 @@ pub struct LaunchedTarget(Mutex<Option<Running>>);
 
 struct Running {
     child: Child,
-    port: u16,
+    /// The Chromium debug port: web pages and VS Code. Visual Studio has none.
+    port: Option<u16>,
     /// Set when the target is VS Code (its CLI and codebase folder are needed for code steps).
     vscode: Option<crate::vscode::VsCode>,
+    /// Set when the target is Visual Studio, driven through DTE and UI Automation.
+    visual_studio: Option<crate::visualstudio::VisualStudio>,
+}
+
+impl Running {
+    /// Ends the target. Visual Studio runs on the presenter's own settings, so it is asked to
+    /// quit first (it prompts for unsaved files as usual) and only killed if it doesn't.
+    fn stop(mut self) {
+        if self.visual_studio.is_some()
+            && let Ok(dte) = crate::visualstudio::connect(self.child.id())
+            && dte.get("Quit").is_ok()
+        {
+            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+            while std::time::Instant::now() < deadline {
+                if matches!(self.child.try_wait(), Ok(Some(_))) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 #[derive(Serialize)]
@@ -129,25 +153,18 @@ fn replace_running_with(
     spawn: impl FnOnce() -> Result<(Child, u16), String>,
 ) -> Result<CapabilityProfile, String> {
     let mut slot = state.0.lock().map_err(err)?;
-    if let Some(mut previous) = slot.take() {
-        let _ = previous.child.kill();
-        let _ = previous.child.wait();
+    if let Some(previous) = slot.take() {
+        previous.stop();
     }
     let (child, port) = spawn()?;
     let profile = detect(child.id(), port);
-    *slot = Some(Running { child, port, vscode });
+    *slot = Some(Running { child, port: Some(port), vscode, visual_studio: None });
     Ok(profile)
 }
 
-/// Launches VS Code on the codebase `folder` (or the saved one) with Scenra's recording profile
-/// and a debug port. The folder is remembered as the project's codebase.
-#[tauri::command(async)]
-pub fn launch_vscode(
-    app: AppHandle,
-    state: State<'_, LaunchedTarget>,
-    folder: Option<String>,
-) -> Result<CapabilityProfile, String> {
-    let mut settings = crate::settings::load(&app);
+/// The codebase folder from the UI, or the saved one; saved as the project's codebase.
+fn codebase_folder(app: &AppHandle, folder: Option<String>) -> Result<PathBuf, String> {
+    let mut settings = crate::settings::load(app);
     let folder = match folder.filter(|f| !f.trim().is_empty()) {
         Some(f) => PathBuf::from(f.trim()),
         None => settings.codebase_folder.clone().ok_or("Choose the codebase folder to open")?,
@@ -158,7 +175,96 @@ pub fn launch_vscode(
     // One spelling of the folder everywhere: backslashes, no `\\?\` prefix.
     let folder = PathBuf::from(folder.canonicalize().map_err(err)?.to_string_lossy().trim_start_matches(r"\\?\").to_owned());
     settings.codebase_folder = Some(folder.clone());
-    crate::settings::save(&app, &settings)?;
+    crate::settings::save(app, &settings)?;
+    Ok(folder)
+}
+
+/// Launches Visual Studio on the codebase `folder` (or the saved one) and waits until it accepts
+/// automation. The folder is remembered as the project's codebase.
+#[tauri::command(async)]
+pub fn launch_visual_studio(
+    app: AppHandle,
+    state: State<'_, LaunchedTarget>,
+    folder: Option<String>,
+) -> Result<CapabilityProfile, String> {
+    let folder = codebase_folder(&app, folder)?;
+    let vs = crate::visualstudio::VisualStudio { exe: crate::visualstudio::find_exe()?, folder };
+    start_visual_studio(&state, vs)
+}
+
+fn start_visual_studio(state: &LaunchedTarget, vs: crate::visualstudio::VisualStudio) -> Result<CapabilityProfile, String> {
+    let mut slot = state.0.lock().map_err(err)?;
+    if let Some(previous) = slot.take() {
+        previous.stop();
+    }
+    let mut child = crate::visualstudio::spawn(&vs)?;
+    if let Err(e) = crate::visualstudio::wait_until_ready(child.id()) {
+        let _ = child.kill();
+        return Err(e);
+    }
+    let pid = child.id();
+    *slot = Some(Running { child, port: None, vscode: None, visual_studio: Some(vs) });
+    Ok(visual_studio_profile(pid))
+}
+
+/// Tests: Visual Studio on `folder`.
+#[cfg(test)]
+pub(crate) fn launch_visual_studio_for_test(folder: &Path) -> Result<LaunchedTarget, String> {
+    let state = LaunchedTarget::default();
+    let vs = crate::visualstudio::VisualStudio { exe: crate::visualstudio::find_exe()?, folder: folder.to_owned() };
+    start_visual_studio(&state, vs)?;
+    Ok(state)
+}
+
+fn visual_studio_profile(pid: u32) -> CapabilityProfile {
+    CapabilityProfile {
+        application: "Visual Studio".into(),
+        process: ProcessInfo { pid, exe: processes().get(&pid).map(|p| p.exe.clone()).unwrap_or_default() },
+        capabilities: Capabilities { cdp: CdpCapability::default() },
+        preferred_locator: Some("dte"),
+        warnings: vec![],
+    }
+}
+
+/// The running target if it's Visual Studio: its process id and folder.
+pub fn visual_studio(state: &LaunchedTarget) -> Result<(u32, crate::visualstudio::VisualStudio), String> {
+    let pid = running_pid(state)?;
+    let slot = state.0.lock().map_err(err)?;
+    let vs = slot.as_ref().and_then(|r| r.visual_studio.clone()).ok_or("This step needs Visual Studio: launch it from Step 3 first")?;
+    Ok((pid, vs))
+}
+
+/// The running target's process id, whatever kind it is.
+pub fn running_pid(state: &LaunchedTarget) -> Result<u32, String> {
+    let mut slot = state.0.lock().map_err(err)?;
+    if let Some(running) = slot.as_mut()
+        && running.child.try_wait().map_err(err)?.is_none()
+    {
+        return Ok(running.child.id());
+    }
+    *slot = None;
+    Err("no target is running: launch Chrome, VS Code, Visual Studio or the demo target first".into())
+}
+
+/// What the running target shows, in the form scene-start checks compare: the page for a web
+/// target or VS Code, the open file and top line for Visual Studio.
+pub fn current_state(state: &LaunchedTarget) -> Result<crate::page::InitialState, String> {
+    if let Ok((pid, _)) = visual_studio(state) {
+        return crate::visualstudio::state(pid);
+    }
+    let (_, port) = running(state)?;
+    crate::page::initial_state(&mut crate::page::page_session(port)?)
+}
+
+/// Launches VS Code on the codebase `folder` (or the saved one) with Scenra's recording profile
+/// and a debug port. The folder is remembered as the project's codebase.
+#[tauri::command(async)]
+pub fn launch_vscode(
+    app: AppHandle,
+    state: State<'_, LaunchedTarget>,
+    folder: Option<String>,
+) -> Result<CapabilityProfile, String> {
+    let folder = codebase_folder(&app, folder)?;
     let vs = crate::vscode::VsCode {
         exe: crate::vscode::find_exe()?,
         profile: app.path().app_local_data_dir().map_err(err)?.join("targets").join("vscode-profile"),
@@ -213,7 +319,10 @@ pub fn running(state: &LaunchedTarget) -> Result<(u32, u16), String> {
     if let Some(running) = slot.as_mut()
         && running.child.try_wait().map_err(err)?.is_none()
     {
-        return Ok((running.child.id(), running.port));
+        return match running.port {
+            Some(port) => Ok((running.child.id(), port)),
+            None => Err("Visual Studio has no web page: this needs Chrome, VS Code or the demo target".into()),
+        };
     }
     *slot = None;
     Err("no target is running: launch Chrome or the demo target first".into())
@@ -284,14 +393,16 @@ pub fn target_profile(state: State<'_, LaunchedTarget>) -> Result<Option<Capabil
     {
         *slot = None;
     }
-    Ok(slot.as_ref().map(|running| detect(running.child.id(), running.port)))
+    Ok(slot.as_ref().map(|running| match running.port {
+        Some(port) => detect(running.child.id(), port),
+        None => visual_studio_profile(running.child.id()),
+    }))
 }
 
 #[tauri::command]
 pub fn stop_target(state: State<'_, LaunchedTarget>) -> Result<(), String> {
-    if let Some(mut running) = state.0.lock().map_err(err)?.take() {
-        let _ = running.child.kill();
-        let _ = running.child.wait();
+    if let Some(running) = state.0.lock().map_err(err)?.take() {
+        running.stop();
     }
     Ok(())
 }
