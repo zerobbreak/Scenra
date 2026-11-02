@@ -459,6 +459,11 @@ fn processes() -> HashMap<u32, ProcessEntry> {
     map
 }
 
+/// Running processes started from `exe` (e.g. "devenv.exe"), ignoring case.
+pub fn process_ids(exe: &str) -> Vec<u32> {
+    processes().into_iter().filter(|(_, p)| p.exe.eq_ignore_ascii_case(exe)).map(|(pid, _)| pid).collect()
+}
+
 /// `root` and every process descended from it, e.g. Chrome's or WebView2's browser processes.
 pub fn process_tree(root: u32) -> std::collections::HashSet<u32> {
     let all = processes();

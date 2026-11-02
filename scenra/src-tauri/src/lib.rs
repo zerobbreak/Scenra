@@ -2,6 +2,7 @@ mod ai;
 mod capture;
 mod cdp;
 mod display;
+mod dte;
 mod editor;
 mod engine;
 mod hooks;
@@ -20,6 +21,7 @@ mod take;
 mod target;
 mod teach;
 mod teach_code;
+mod uia;
 mod steps;
 mod vscode;
 
